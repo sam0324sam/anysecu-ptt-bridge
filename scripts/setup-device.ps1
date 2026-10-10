@@ -8,9 +8,9 @@ param(
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BaseDir = Split-Path -Parent $ScriptDir
-$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.2.apk"
+$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.3.apk"
 if (-not (Test-Path $PttApk)) {
-    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.1.apk"
+    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.2.apk"
 }
 $MumlaApk = Join-Path $BaseDir "releases\mumla-v3.7.3.apk"
 

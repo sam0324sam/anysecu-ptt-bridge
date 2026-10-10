@@ -31,10 +31,10 @@ $Javac = if (Test-Path "$JavaHome\bin\javac.exe") { "$JavaHome\bin\javac.exe" } 
 $Java = if (Test-Path "$JavaHome\bin\java.exe") { "$JavaHome\bin\java.exe" } else { "java" }
 $Keystore = Join-Path $ScriptDir "debug.keystore"
 $BinDir = Join-Path $ScriptDir "bin"
-$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.2.apk"
+$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.3.apk"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Building Anysecu PTT Bridge (v1.2)      " -ForegroundColor Cyan
+Write-Host "  Building Anysecu PTT Bridge (v1.3)      " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # 2. 清理與建立 bin

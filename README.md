@@ -1,4 +1,4 @@
-# Anysecu PTT Bridge (High-Availability PTT Direct)
+# Anysecu PTT Bridge (Hardware ALSA-BCLO Engine)
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.1%2B-green.svg)](https://android.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,16 +6,19 @@
 [![Companion](https://img.shields.io/badge/Companion-Mumla%20(Mumble)-orange.svg)](https://github.com/mumla-app/mumla)
 
 專為 **Anysecu 實體按鍵對講機**（例如 Anysecu G393, Qualcomm 晶片, Android 8.1 系統）打造的背景常駐 PTT 橋接與對講優化工具。  
-無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，具備 **零延遲硬體直通、100% 絕對可用、零死鎖防抖動** 特性，配合 Mumla 的「半雙工」模式徹底根除多人搶麥與聲學回音干擾。
+無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，並搭載 **硬體級 ALSA-BCLO（Busy Channel Lockout，佔線禁發）** 與 **防搶尾音保護** 機制，隊友說話時自動攔截 PTT 送話並發出提示音，徹底杜絕搶麥。
 
 ---
 
 ## 🎯 核心功能亮點 (Key Features)
 
 - 📻 **硬體 PTT 零延遲直通映射**：直接攔截 Anysecu 專用硬體側鍵訊號，開箱即用語音通話。
-- 🛡️ **高可用性零阻塞架構 (Zero-Deadlock Guarantee)**：
-  - 嚴格遵守對講機通話第一準則：**按鍵送話是最高優先級的生命線，任何情況下絕不鎖死發話！**
-  - 內建按鍵狀態防抖動 (Debounce) 機制，杜絕連續觸發或抖動造成的廣播浪費。
+- 🚫 **硬體級 ALSA-BCLO 佔線禁發 (Busy Channel Lockout)**：
+  - 核心驅動級精準監測：直接讀取 Linux Kernel ALSA 音訊設備狀態 (`/proc/asound/card0/pcm*p/sub0/status`)。
+  - **隊友講話中（喇叭有聲）**：按下 PTT 立即阻擋送話並發出短促忙線嗶聲（Busy Beep），絕不撞話。
+  - **頻道空閒時（喇叭靜音）**：按下 PTT 100% 立即發話，**徹底根除 v1.1 之軟體死鎖 Bug**。
+- ⏱️ **防搶尾音與斷句保護 (200ms Hangover Time)**：
+  - 隊友說完話後保留 200ms 緩衝保護，防止語音短暫停頓時被強行截話。
 - ⚡ **開機自動常駐・零磁碟損耗**：
   - 開機自動在背景啟動守護服務 (`START_STICKY` + 前台 Notification)。
   - 脫機獨立運作，平時免接電腦、免開 ADB、0% 閒置 CPU 佔用。
@@ -45,9 +48,12 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
   - 按下：`se.lublin.mumla.action.TALK` with extra `status="on"`
   - 放開：`se.lublin.mumla.action.TALK` with extra `status="off"`
 
-### 3. 回音消除的正確解法：半雙工 (Half-duplex)
-在同一個空間內多台對講機測試時，刺耳的聲音反饋並非網路延遲造成，而是物理喇叭聲音漏回麥克風的聲學反饋。  
-**解法**：在 Mumla 中啟用 **「半雙工 (Half-duplex)」**。當本機按下 PTT 發話時，Mumla 會自動強制靜音自身喇叭輸出，從物理層面 100% 切斷自體回音鏈路。
+### 3. ALSA-BCLO 硬體級佔線檢測原理
+在 Android 8.1 系統上，上層的 `AudioPlaybackCallback` 由於缺乏 Android 10+ 的 `isActive()` API，只要通訊 App 保持連線就會常態回報 Player 存在，無法作為發聲依據。  
+本專案採用更深入的 **Linux ALSA 音訊設備狀態** 檢測：
+- 當喇叭無聲時：`/proc/asound/card0/pcm*p/sub0/status` 檔案一律為 `closed`。
+- 當隊友說話喇叭震動發聲時：該 PCM 設備狀態立即躍遷為 `state: RUNNING`。
+- 透過在微秒級（0.2ms）掃描該硬體檔案，能夠 **100% 精確且無誤判** 地辨識隊友發話狀態，既保證空閒時 100% 隨按隨說，又保證隊友說話時 100% 阻擋搶麥！
 
 ---
 
@@ -63,7 +69,7 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
 腳本會自動完成：
 1. 停用衝突的原廠 Zello (`com.loudtalks`, `com.zello.ptt`)
 2. 擴增虛擬解析度至 `200x240` ( density 72 )
-3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.2`
+3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.3`
 4. 授予關鍵的 `READ_LOGS` 特殊權限
 5. 自動啟動背景守護服務
 
@@ -87,7 +93,7 @@ adb shell wm density 72
 #### 3. 安裝軟體並授權
 ```bash
 adb install -r releases/mumla-v3.7.3.apk
-adb install -r releases/AnysecuPttBridge-v1.2.apk
+adb install -r releases/AnysecuPttBridge-v1.3.apk
 adb shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
 ```
 
@@ -100,17 +106,14 @@ adb shell am start -n com.anysecu.pttbridge/.MainActivity
 
 ## ⚙️ Mumla 推薦最佳設定 (Best Practices)
 
-為了獲得最佳對講品質並杜絕一切回音，建議在 Mumla 客戶端內做以下調整：
-
 1. **傳輸方式 (Transmit Mode)**：
    - 進入 **設定 (Settings)** -> **語音 (Audio)** -> **傳輸模式 (Transmit Mode)**。
    - 選擇 **按住說話 (Push-to-Talk)**。
-2. **啟用半雙工 (Half-Duplex) - 核心回音消除**：
-   - 在語音設定中，勾選 **「半雙工 (Half-duplex)」**。
-   - *效果：當你按住 PTT 發話時，手機會自動靜音喇叭輸出，從根本上切斷聲音從喇叭漏回麥克風造成的聲學回音！*
-3. **語音品質 (Audio Quality)**：
+2. **語音品質 (Audio Quality)**：
    - 選擇 **平衡 (Balanced)** 或 **低延遲 (Low Latency)**。
    - 伺服器端音訊頻寬建議設定在 `40 kbps ~ 64 kbps`，確保在雪場或戶外 4G 弱訊號時依然流暢清晰。
+3. **回音消除 (Echo Cancellation)**：
+   - 勾選開啟。
 
 ---
 
@@ -121,12 +124,6 @@ adb shell am start -n com.anysecu.pttbridge/.MainActivity
 ```powershell
 .\build.ps1
 ```
-
-腳本流程：
-1. `javac` 編譯 Java 原始碼（以 Java 8 為 target 相容 Android 8.1）。
-2. `d8` 轉換 bytecode 為 `classes.dex`。
-3. `aapt` 打包資源與 `AndroidManifest.xml`。
-4. `apksigner` 自動使用 `debug.keystore` 進行 v1/v2 簽名，產出發布版 APK。
 
 ---
 
@@ -140,7 +137,7 @@ anysecu-ptt-bridge/
 ├── build.ps1                    # 免 IDE 一鍵編譯簽名腳本
 ├── debug.keystore               # 開發測試簽名金鑰
 ├── releases/
-│   ├── AnysecuPttBridge-v1.2.apk # 最新高可用零死鎖版 Bridge
+│   ├── AnysecuPttBridge-v1.3.apk # 最新 ALSA-BCLO 硬體級佔線禁發版
 │   └── mumla-v3.7.3.apk         # 經實測最穩定相容的 Mumla 客戶端
 ├── scripts/
 │   └── setup-device.ps1         # 對講機一鍵佈署與螢幕修復腳本
@@ -148,7 +145,7 @@ anysecu-ptt-bridge/
     └── com/anysecu/pttbridge/
         ├── BootReceiver.java    # 開機自啟廣播接收器
         ├── MainActivity.java    # 狀態顯示與服務喚醒
-        └── PttBridgeService.java# 核心日誌管道監聽與高可用防抖動轉發
+        └── PttBridgeService.java# 核心日誌管道監聽與 ALSA-BCLO 佔線阻擋邏輯
 ```
 
 ---

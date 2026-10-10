@@ -9,10 +9,13 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.InputStreamReader;
 
 public class PttBridgeService extends Service {
@@ -21,6 +24,30 @@ public class PttBridgeService extends Service {
     private static final int NOTIFICATION_ID = 1001;
     private static final String MUMLA_PKG = "se.lublin.mumla";
     private static final String MUMLA_ACTION = "se.lublin.mumla.action.TALK";
+    private static final long HANGOVER_TIME_MS = 200; // 防搶尾音與斷句緩衝 (200ms)
+
+    private static final String[] PCM_STATUS_PATHS = new String[] {
+        "/proc/asound/card0/pcm0p/sub0/status",
+        "/proc/asound/card0/pcm1p/sub0/status",
+        "/proc/asound/card0/pcm2p/sub0/status",
+        "/proc/asound/card0/pcm3p/sub0/status",
+        "/proc/asound/card0/pcm4p/sub0/status",
+        "/proc/asound/card0/pcm5p/sub0/status",
+        "/proc/asound/card0/pcm7p/sub0/status",
+        "/proc/asound/card0/pcm10p/sub0/status",
+        "/proc/asound/card0/pcm12p/sub0/status",
+        "/proc/asound/card0/pcm13p/sub0/status",
+        "/proc/asound/card0/pcm14p/sub0/status",
+        "/proc/asound/card0/pcm15p/sub0/status",
+        "/proc/asound/card0/pcm16p/sub0/status",
+        "/proc/asound/card0/pcm17p/sub0/status",
+        "/proc/asound/card0/pcm18p/sub0/status",
+        "/proc/asound/card0/pcm25p/sub0/status",
+        "/proc/asound/card0/pcm34p/sub0/status",
+        "/proc/asound/card0/pcm35p/sub0/status",
+        "/proc/asound/card0/pcm36p/sub0/status",
+        "/proc/asound/card0/pcm37p/sub0/status"
+    };
 
     private BroadcastReceiver mPttReceiver;
     private Thread mLogcatThread;
@@ -28,29 +55,108 @@ public class PttBridgeService extends Service {
     private Process mLogcatProcess;
 
     private volatile boolean mIsTalking = false;
+    private volatile boolean mBlocked = false;
+    private volatile long mLastPlaybackActiveTime = 0;
+    private volatile long mLastBusyToneTime = 0;
+    private ToneGenerator mToneGenerator;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification());
+        try {
+            mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
+        } catch (Exception ignored) {}
         registerPttReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.2 started (Direct High-Availability)");
+        Log.i(TAG, "PttBridgeService v1.3 started (Hardware ALSA-BCLO Engine)");
+    }
+
+    /**
+     * 透過 Linux ALSA 硬體狀態檢查喇叭是否正在發聲 (隊友講話中)
+     */
+    private boolean isAlsaPlaybackActive() {
+        byte[] buffer = new byte[32];
+        for (String path : PCM_STATUS_PATHS) {
+            FileInputStream fis = null;
+            try {
+                fis = new FileInputStream(path);
+                int n = fis.read(buffer);
+                if (n > 0) {
+                    // closed 首字元為 'c'，直接跳過；若非 'c' 則檢查是否為 RUNNING
+                    if (buffer[0] != 'c') {
+                        String s = new String(buffer, 0, n);
+                        if (s.contains("RUNNING")) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (fis != null) {
+                    try { fis.close(); } catch (Exception ignored) {}
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判定頻道是否佔線 (BCLO)
+     */
+    private boolean isChannelBusy() {
+        // 若距上次自身忙線音小於 120ms，忽略自身聲音避免回饋
+        if (System.currentTimeMillis() - mLastBusyToneTime < 120) {
+            return false;
+        }
+
+        boolean activeNow = isAlsaPlaybackActive();
+        if (activeNow) {
+            mLastPlaybackActiveTime = System.currentTimeMillis();
+            return true;
+        }
+
+        // 檢查防搶尾音緩衝
+        long elapsed = System.currentTimeMillis() - mLastPlaybackActiveTime;
+        return elapsed < HANGOVER_TIME_MS;
+    }
+
+    private void playBusyTone() {
+        mLastBusyToneTime = System.currentTimeMillis();
+        try {
+            if (mToneGenerator != null) {
+                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 80);
+            }
+        } catch (Exception ignored) {}
     }
 
     private synchronized void handlePttDown() {
+        if (isChannelBusy()) {
+            // 隊友說話中 -> 佔線禁發 (BCLO 阻擋)
+            mBlocked = true;
+            Log.w(TAG, "Channel Busy (Teammate Talking) -> Block PTT & Sound Beep");
+            playBusyTone();
+            return;
+        }
+
+        mBlocked = false;
         if (!mIsTalking) {
             mIsTalking = true;
-            Log.d(TAG, "PTT Pressed -> send Mumla talk ON");
+            Log.d(TAG, "Channel Free -> PTT Down -> Mumla Talk ON");
             sendMumlaTalk("on");
         }
     }
 
     private synchronized void handlePttUp() {
+        if (mBlocked) {
+            mBlocked = false;
+            return;
+        }
+
         if (mIsTalking) {
             mIsTalking = false;
-            Log.d(TAG, "PTT Released -> send Mumla talk OFF");
+            Log.d(TAG, "PTT Up -> Mumla Talk OFF");
             sendMumlaTalk("off");
         }
     }
@@ -62,7 +168,7 @@ public class PttBridgeService extends Service {
                 "PTT Bridge Service",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Background PTT button bridge for Mumla");
+            channel.setDescription("Background PTT button bridge for Mumla with ALSA-BCLO");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(channel);
@@ -85,7 +191,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (直通零延遲)")
+               .setContentText("PTT 守護中 (含硬體級佔線禁發 BCLO)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -185,6 +291,12 @@ public class PttBridgeService extends Service {
                 unregisterReceiver(mPttReceiver);
             } catch (Exception ignored) {}
             mPttReceiver = null;
+        }
+        if (mToneGenerator != null) {
+            try {
+                mToneGenerator.release();
+            } catch (Exception ignored) {}
+            mToneGenerator = null;
         }
         super.onDestroy();
     }
