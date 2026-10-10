@@ -1,4 +1,4 @@
-# Anysecu PTT Bridge (with BCLO Busy Channel Lockout)
+# Anysecu PTT Bridge (High-Availability PTT Direct)
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.1%2B-green.svg)](https://android.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,18 +6,16 @@
 [![Companion](https://img.shields.io/badge/Companion-Mumla%20(Mumble)-orange.svg)](https://github.com/mumla-app/mumla)
 
 專為 **Anysecu 實體按鍵對講機**（例如 Anysecu G393, Qualcomm 晶片, Android 8.1 系統）打造的背景常駐 PTT 橋接與對講優化工具。  
-無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，並內建專業無線電必備的 **BCLO（Busy Channel Lockout，佔線禁發）** 與 **防搶尾音保護** 機制，徹底根除多人搶麥與回音干擾。
+無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，具備 **零延遲硬體直通、100% 絕對可用、零死鎖防抖動** 特性，配合 Mumla 的「半雙工」模式徹底根除多人搶麥與聲學回音干擾。
 
 ---
 
 ## 🎯 核心功能亮點 (Key Features)
 
-- 📻 **硬體 PTT 零延遲映射**：直接攔截 Anysecu 專用硬體側鍵訊號，開箱即用語音通話。
-- 🚫 **BCLO 佔線禁發 (Busy Channel Lockout)**：
-  - 即時監聽隊友發話狀態。
-  - 當頻道中有其他成員正在說話時，**自動鎖定發話並鳴響忙線提示音（Busy Beep）**，防止新人搶麥撞話。
-- ⏱️ **防搶尾音延遲 (250ms Hangover Time)**：
-  - 隊友說完話後的瞬間保留緩衝，防止語音斷續或搶截話尾。
+- 📻 **硬體 PTT 零延遲直通映射**：直接攔截 Anysecu 專用硬體側鍵訊號，開箱即用語音通話。
+- 🛡️ **高可用性零阻塞架構 (Zero-Deadlock Guarantee)**：
+  - 嚴格遵守對講機通話第一準則：**按鍵送話是最高優先級的生命線，任何情況下絕不鎖死發話！**
+  - 內建按鍵狀態防抖動 (Debounce) 機制，杜絕連續觸發或抖動造成的廣播浪費。
 - ⚡ **開機自動常駐・零磁碟損耗**：
   - 開機自動在背景啟動守護服務 (`START_STICKY` + 前台 Notification)。
   - 脫機獨立運作，平時免接電腦、免開 ADB、0% 閒置 CPU 佔用。
@@ -47,10 +45,9 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
   - 按下：`se.lublin.mumla.action.TALK` with extra `status="on"`
   - 放開：`se.lublin.mumla.action.TALK` with extra `status="off"`
 
-### 3. BCLO 佔線禁發實作原理
-透過 `AudioManager.AudioPlaybackCallback` (API 26+) 與 `AudioManager.isMusicActive()` 雙重檢測：
-1. 監聽當前活躍播放的音訊串流，自動排除系統提示音（避免自我死鎖）。
-2. 使用者按下 PTT 時，若偵測到有聲音正在播放（或距上次播放結束未滿 250ms），立即中止送話，並由 `ToneGenerator` 發出高頻短嗶聲提示使用者。
+### 3. 回音消除的正確解法：半雙工 (Half-duplex)
+在同一個空間內多台對講機測試時，刺耳的聲音反饋並非網路延遲造成，而是物理喇叭聲音漏回麥克風的聲學反饋。  
+**解法**：在 Mumla 中啟用 **「半雙工 (Half-duplex)」**。當本機按下 PTT 發話時，Mumla 會自動強制靜音自身喇叭輸出，從物理層面 100% 切斷自體回音鏈路。
 
 ---
 
@@ -66,7 +63,7 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
 腳本會自動完成：
 1. 停用衝突的原廠 Zello (`com.loudtalks`, `com.zello.ptt`)
 2. 擴增虛擬解析度至 `200x240` ( density 72 )
-3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.1`
+3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.2`
 4. 授予關鍵的 `READ_LOGS` 特殊權限
 5. 自動啟動背景守護服務
 
@@ -90,7 +87,7 @@ adb shell wm density 72
 #### 3. 安裝軟體並授權
 ```bash
 adb install -r releases/mumla-v3.7.3.apk
-adb install -r releases/AnysecuPttBridge-v1.1.apk
+adb install -r releases/AnysecuPttBridge-v1.2.apk
 adb shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
 ```
 
@@ -143,7 +140,7 @@ anysecu-ptt-bridge/
 ├── build.ps1                    # 免 IDE 一鍵編譯簽名腳本
 ├── debug.keystore               # 開發測試簽名金鑰
 ├── releases/
-│   ├── AnysecuPttBridge-v1.1.apk # 預編譯好的 Bridge 軟體 (含 BCLO)
+│   ├── AnysecuPttBridge-v1.2.apk # 最新高可用零死鎖版 Bridge
 │   └── mumla-v3.7.3.apk         # 經實測最穩定相容的 Mumla 客戶端
 ├── scripts/
 │   └── setup-device.ps1         # 對講機一鍵佈署與螢幕修復腳本
@@ -151,20 +148,8 @@ anysecu-ptt-bridge/
     └── com/anysecu/pttbridge/
         ├── BootReceiver.java    # 開機自啟廣播接收器
         ├── MainActivity.java    # 狀態顯示與服務喚醒
-        └── PttBridgeService.java# 核心日誌管道監聽與 BCLO 忙音邏輯
+        └── PttBridgeService.java# 核心日誌管道監聽與高可用防抖動轉發
 ```
-
----
-
-## 🌐 English Summary
-
-**Anysecu PTT Bridge** is a lightweight, zero-overhead background service tailored for Anysecu Qualcomm-based physical walkie-talkies running Android 8.1 (such as Anysecu G393).
-
-### Key Highlights:
-- **Zero-Drop Hardware Interception**: Bypasses the OEM limitation where the physical F1 PTT key is intercepted without sending public Android intents, by listening directly to the system log stream via an in-memory process pipe (`READ_LOGS`).
-- **Busy Channel Lockout (BCLO)**: Monitors `AudioPlaybackConfiguration` & `AudioManager.isMusicActive()`. If a teammate is talking, pressing PTT sounds a hardware busy tone and locks out transmission to eliminate overlapping voice and echoes.
-- **Screen Resolution Fix**: Fixes the ultra-small 128x160 LCD UI truncation issue in Mumla using `wm size 200x240`.
-- **Zero Maintenance**: Starts automatically on boot, requires zero computer tethering once configured, and consumes 0% idle CPU.
 
 ---
 

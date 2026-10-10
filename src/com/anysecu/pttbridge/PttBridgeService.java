@@ -9,108 +9,50 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.media.AudioManager;
-import android.media.AudioPlaybackConfiguration;
-import android.media.ToneGenerator;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.util.List;
 
 public class PttBridgeService extends Service {
+    private static final String TAG = "AnysecuPttBridge";
     private static final String CHANNEL_ID = "ptt_bridge_channel";
     private static final int NOTIFICATION_ID = 1001;
     private static final String MUMLA_PKG = "se.lublin.mumla";
     private static final String MUMLA_ACTION = "se.lublin.mumla.action.TALK";
-    private static final long HANGOVER_TIME_MS = 250; // 防搶尾音保護 250ms
 
     private BroadcastReceiver mPttReceiver;
     private Thread mLogcatThread;
     private volatile boolean mRunning = true;
     private Process mLogcatProcess;
 
-    private AudioManager mAudioManager;
-    private AudioManager.AudioPlaybackCallback mPlaybackCallback;
-    private volatile boolean mAudioPlaying = false;
-    private volatile long mLastAudioPlaybackTime = 0;
-    private volatile boolean mTransmissionBlocked = false;
-    private ToneGenerator mToneGenerator;
+    private volatile boolean mIsTalking = false;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification());
-        initAudioManager();
         registerPttReceiver();
         startLogcatListener();
+        Log.i(TAG, "PttBridgeService v1.2 started (Direct High-Availability)");
     }
 
-    private void initAudioManager() {
-        mAudioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        try {
-            mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
-        } catch (Exception ignored) {}
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mAudioManager != null) {
-            mPlaybackCallback = new AudioManager.AudioPlaybackCallback() {
-                @Override
-                public void onPlaybackConfigChanged(List<AudioPlaybackConfiguration> configs) {
-                    super.onPlaybackConfigChanged(configs);
-                    boolean playing = false;
-                    if (configs != null) {
-                        for (AudioPlaybackConfiguration config : configs) {
-                            if (config != null && config.getAudioAttributes() != null) {
-                                int usage = config.getAudioAttributes().getUsage();
-                                if (usage != android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION) {
-                                    playing = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    mAudioPlaying = playing;
-                    if (playing) {
-                        mLastAudioPlaybackTime = System.currentTimeMillis();
-                    }
-                }
-            };
-            mAudioManager.registerAudioPlaybackCallback(mPlaybackCallback, null);
+    private synchronized void handlePttDown() {
+        if (!mIsTalking) {
+            mIsTalking = true;
+            Log.d(TAG, "PTT Pressed -> send Mumla talk ON");
+            sendMumlaTalk("on");
         }
     }
 
-    private boolean isChannelBusy() {
-        if (mAudioPlaying) return true;
-        if (mAudioManager != null && mAudioManager.isMusicActive()) return true;
-        long elapsed = System.currentTimeMillis() - mLastAudioPlaybackTime;
-        return elapsed < HANGOVER_TIME_MS;
-    }
-
-    private void playBusyTone() {
-        try {
-            if (mToneGenerator != null) {
-                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 120);
-            }
-        } catch (Exception ignored) {}
-    }
-
-    private void handlePttDown() {
-        if (isChannelBusy()) {
-            playBusyTone();
-            mTransmissionBlocked = true;
-            return;
+    private synchronized void handlePttUp() {
+        if (mIsTalking) {
+            mIsTalking = false;
+            Log.d(TAG, "PTT Released -> send Mumla talk OFF");
+            sendMumlaTalk("off");
         }
-        mTransmissionBlocked = false;
-        sendMumlaTalk("on");
-    }
-
-    private void handlePttUp() {
-        if (mTransmissionBlocked) {
-            mTransmissionBlocked = false;
-            return;
-        }
-        sendMumlaTalk("off");
     }
 
     private void createNotificationChannel() {
@@ -120,7 +62,7 @@ public class PttBridgeService extends Service {
                 "PTT Bridge Service",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Background PTT button bridge for Mumla with BCLO");
+            channel.setDescription("Background PTT button bridge for Mumla");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(channel);
@@ -143,7 +85,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (含佔線禁發 BCLO)")
+               .setContentText("PTT 守護中 (直通零延遲)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -243,17 +185,6 @@ public class PttBridgeService extends Service {
                 unregisterReceiver(mPttReceiver);
             } catch (Exception ignored) {}
             mPttReceiver = null;
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mAudioManager != null && mPlaybackCallback != null) {
-            try {
-                mAudioManager.unregisterAudioPlaybackCallback(mPlaybackCallback);
-            } catch (Exception ignored) {}
-        }
-        if (mToneGenerator != null) {
-            try {
-                mToneGenerator.release();
-            } catch (Exception ignored) {}
-            mToneGenerator = null;
         }
         super.onDestroy();
     }
