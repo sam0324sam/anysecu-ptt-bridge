@@ -1,0 +1,17 @@
+# Build outputs
+/bin/
+*.dex
+*.class
+
+# IDE & Editor
+.idea/
+*.iml
+.vscode/
+
+# Logs & temp
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
