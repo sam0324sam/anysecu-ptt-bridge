@@ -430,12 +430,9 @@ public class PttBridgeService extends Service {
     }
 
     private synchronized void handleVolumeUpEvent() {
-        if (PocketLockActivity.isLocked()) {
-            return;
-        }
-
         long now = System.currentTimeMillis();
-        if (now - mLastVolUpTime > 450) {
+        // 間隔超過 1200ms 視為新的一次按鍵起始 (包容 logd chatty 壓縮導致的 700~900ms 延遲)
+        if (now - mLastVolUpTime > 1200) {
             mFirstVolUpTime = now;
             mLastVolUpTime = now;
             mVolUpRepeatCount = 1;
@@ -465,8 +462,8 @@ public class PttBridgeService extends Service {
             return;
         }
 
-        // 當累積按住時間 >= 550ms，且收到至少 2 次事件，且尚未播報：判定為長按！
-        if (now - mFirstVolUpTime >= 550 && mVolUpRepeatCount >= 2) {
+        // 當累積按住時間 >= 500ms，且收到至少 2 次事件，且尚未播報：判定為長按！
+        if (now - mFirstVolUpTime >= 500 && mVolUpRepeatCount >= 2) {
             mVolUpAnnounced = true;
             Log.i(TAG, "Volume-Up Long Press detected in background (" + (now - mFirstVolUpTime) + "ms, count=" + mVolUpRepeatCount + ")");
 

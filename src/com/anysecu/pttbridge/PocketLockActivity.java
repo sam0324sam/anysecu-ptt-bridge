@@ -162,28 +162,28 @@ public class PocketLockActivity extends Activity {
     private synchronized void onUnlockClick() {
         long now = System.currentTimeMillis();
 
-        // 200ms 防抖去重 (防止硬體彈跳抖動)
-        if (now - mLastClickTime < 200) {
+        // 80ms 靈敏防抖 (消除按鍵過濾延遲，支援極速同頻連按)
+        if (now - mLastClickTime < 80) {
             return;
         }
 
-        if (now - mLastClickTime < 900) {
+        if (now - mLastClickTime < 1100) {
             mUnlockClicks++;
         } else {
-            mUnlockClicks = 1; // 間隔超過 900ms 重新計數
+            mUnlockClicks = 1; // 間隔超過 1.1 秒重新計數
         }
         mLastClickTime = now;
 
         Log.d(TAG, "Volume-Down Click in lock mode: " + mUnlockClicks + "/5");
 
-        // 口袋盲操短嗶音反饋 (每實體按下一次滴一聲)
+        // 口袋盲操極速短促滴聲反饋 (25ms，清脆零延遲)
         try {
             if (mToneGenerator != null) {
-                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 40);
+                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 25);
             }
         } catch (Exception ignored) {}
 
-        // 必須實打實連續按下滿 5 次！
+        // 連續按下滿 5 次解鎖！
         if (mUnlockClicks >= 5) {
             mUnlockClicks = 0;
             unlockAndFinish();
