@@ -293,7 +293,7 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
-                            } else if (line.contains("keycode=24") || line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
+                            } else if (line.contains("unipro.hotkey.p3.down") || line.contains("keycode=24") || line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
                                 handleVolumeUpEvent();
                             }
                         }
@@ -452,8 +452,21 @@ public class PttBridgeService extends Service {
         mLastVolUpTime = now;
         mVolUpRepeatCount++;
 
-        // 當累積按住時間 >= 650ms，且收到至少 2 次事件，且尚未播報：判定為長按！
-        if (!mVolUpAnnounced && (now - mFirstVolUpTime >= 650) && mVolUpRepeatCount >= 2) {
+        if (mVolUpAnnounced) {
+            // 長按期間持續壓制音量，防止 Android 系統持續將音量按鍵 repeat 灌滿！
+            if (mOriginalStreamVol != -1) {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am != null) {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
+                    }
+                } catch (Exception ignored) {}
+            }
+            return;
+        }
+
+        // 當累積按住時間 >= 550ms，且收到至少 2 次事件，且尚未播報：判定為長按！
+        if (now - mFirstVolUpTime >= 550 && mVolUpRepeatCount >= 2) {
             mVolUpAnnounced = true;
             Log.i(TAG, "Volume-Up Long Press detected in background (" + (now - mFirstVolUpTime) + "ms, count=" + mVolUpRepeatCount + ")");
 
