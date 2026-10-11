@@ -70,7 +70,7 @@ public class PttBridgeService extends Service {
         } catch (Exception ignored) {}
         registerPttReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Volume Down Pocket Lock Engine)");
+        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Precise Pocket Lock Engine)");
     }
 
     /**
@@ -259,13 +259,8 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
-                                // 長按音量下鍵逾時 -> 立即進入防誤觸鎖定！
+                                // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
-                            } else if (line.contains("unipro.hotkey.p3.down")) {
-                                // 若已處於鎖定狀態，音量下鍵點擊 -> 輔助計數解鎖！
-                                if (PocketLockActivity.isLocked()) {
-                                    PocketLockActivity.registerUnlockClick();
-                                }
                             }
                         }
                     } catch (Exception e) {
