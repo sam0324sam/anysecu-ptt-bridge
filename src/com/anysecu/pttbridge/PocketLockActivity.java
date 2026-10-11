@@ -27,6 +27,24 @@ public class PocketLockActivity extends Activity {
     private long mLastClickTime = 0;
     private ToneGenerator mToneGenerator;
 
+    private final android.os.Handler mVolUpHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean mVolUpLongPressTriggered = false;
+    private final Runnable mVolUpLongPressRunnable = new Runnable() {
+        @Override
+        public void run() {
+            mVolUpLongPressTriggered = true;
+            Log.i(TAG, "Volume-Up Long Press detected in PocketLockActivity! Announcing time.");
+            try {
+                if (mToneGenerator != null) {
+                    mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 50);
+                }
+            } catch (Exception ignored) {}
+            Intent intent = new Intent("com.anysecu.pttbridge.action.ANNOUNCE_TIME");
+            intent.setPackage(getPackageName());
+            sendBroadcast(intent);
+        }
+    };
+
     public static boolean isLocked() {
         return sInstance != null && !sInstance.isFinishing();
     }
@@ -104,8 +122,16 @@ public class PocketLockActivity extends Activity {
         }
 
         // 2. 音量鍵+ (KEYCODE_VOLUME_UP 24)：
-        // 徹底吞噬，嚴禁系統發出調整音量嗶嗶聲，嚴禁調整音量！
+        // 長按 750ms 觸發語音報時，短按吞噬不調整音量
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == 24) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) {
+                    mVolUpLongPressTriggered = false;
+                    mVolUpHandler.postDelayed(mVolUpLongPressRunnable, 750);
+                }
+            } else if (action == KeyEvent.ACTION_UP) {
+                mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
+            }
             return true;
         }
 
@@ -184,6 +210,7 @@ public class PocketLockActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
         if (mToneGenerator != null) {
             try { mToneGenerator.release(); } catch (Exception ignored) {}
             mToneGenerator = null;

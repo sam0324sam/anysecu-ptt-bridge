@@ -69,6 +69,13 @@ public class PttBridgeService extends Service {
     private boolean mBatteryInitialized = false;
     private int mPendingBatteryResId = 0;
 
+    // 音量上鍵長按偵測 (未鎖定狀態)
+    private long mFirstVolUpTime = 0;
+    private long mLastVolUpTime = 0;
+    private int mVolUpRepeatCount = 0;
+    private boolean mVolUpAnnounced = false;
+    private int mOriginalStreamVol = -1;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -286,9 +293,8 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
-                            } else if (line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
-                                // 長按音量上鍵觸發生活口語 12 小時制報時
-                                announceCurrentTime();
+                            } else if (line.contains("keycode=24") || line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
+                                handleVolumeUpEvent();
                             }
                         }
                     } catch (Exception e) {
@@ -420,6 +426,53 @@ public class PttBridgeService extends Service {
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to play battery voice: " + e.getMessage());
+        }
+    }
+
+    private synchronized void handleVolumeUpEvent() {
+        if (PocketLockActivity.isLocked()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - mLastVolUpTime > 450) {
+            mFirstVolUpTime = now;
+            mLastVolUpTime = now;
+            mVolUpRepeatCount = 1;
+            mVolUpAnnounced = false;
+            try {
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    mOriginalStreamVol = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+                }
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        mLastVolUpTime = now;
+        mVolUpRepeatCount++;
+
+        // 當累積按住時間 >= 650ms，且收到至少 2 次事件，且尚未播報：判定為長按！
+        if (!mVolUpAnnounced && (now - mFirstVolUpTime >= 650) && mVolUpRepeatCount >= 2) {
+            mVolUpAnnounced = true;
+            Log.i(TAG, "Volume-Up Long Press detected in background (" + (now - mFirstVolUpTime) + "ms, count=" + mVolUpRepeatCount + ")");
+
+            if (mOriginalStreamVol != -1) {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am != null) {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            try {
+                if (mToneGenerator != null) {
+                    mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 50);
+                }
+            } catch (Exception ignored) {}
+
+            announceCurrentTime();
         }
     }
 
