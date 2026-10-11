@@ -188,10 +188,11 @@ public class PttBridgeService extends Service {
     }
 
     private void playPermitTone() {
-        mLastLocalSoundEndTime = System.currentTimeMillis() + 100;
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 80;
         if (mSoundPool != null && mPermitSoundId != 0) {
             try {
-                mSoundPool.play(mPermitSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+                // 調降音量至適中舒適度 (避免刺耳或外溢)
+                mSoundPool.play(mPermitSoundId, 0.7f, 0.7f, 1, 0, 1.0f);
             } catch (Exception e) {
                 Log.e(TAG, "playPermitTone error: " + e.getMessage());
             }
@@ -199,10 +200,11 @@ public class PttBridgeService extends Service {
     }
 
     private void playEndTone() {
-        mLastLocalSoundEndTime = System.currentTimeMillis() + 80;
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 60;
         if (mSoundPool != null && mEndSoundId != 0) {
             try {
-                mSoundPool.play(mEndSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+                // 調降音量至適中舒適度
+                mSoundPool.play(mEndSoundId, 0.7f, 0.7f, 1, 0, 1.0f);
             } catch (Exception e) {
                 Log.e(TAG, "playEndTone error: " + e.getMessage());
             }
@@ -223,9 +225,9 @@ public class PttBridgeService extends Service {
             mIsTalking = true;
             Log.d(TAG, "Channel Free -> PTT Down -> Play Talk Permit Tone (方案 A)");
             playPermitTone();
-            // 方案 A: 許可音 (~58ms) 播放的同時微緩衝 50ms 後向 Mumla 發出 TALK ON，避免提示音被麥克風翻錄給隊友
+            // 方案 A: 許可音 (~38ms) 播放完成並保留 42ms 空白緩衝 (共 80ms) 後才向 Mumla 開啟麥克風，徹底杜絕接收端聽到提示音
             mMainHandler.removeCallbacks(mStartTalkRunnable);
-            mMainHandler.postDelayed(mStartTalkRunnable, 50);
+            mMainHandler.postDelayed(mStartTalkRunnable, 80);
         }
     }
 
