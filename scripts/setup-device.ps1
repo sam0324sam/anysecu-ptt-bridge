@@ -67,21 +67,17 @@ if (Test-Path $PttApk) {
 }
 
 # 5. 授予 READ_LOGS 特殊權限
-Write-Host "[5/7] 授予 READ_LOGS 特殊權限..." -ForegroundColor Green
+Write-Host "[5/6] 授予 READ_LOGS 特殊權限..." -ForegroundColor Green
 & $adb -s $targetDevice shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
 
-# 6. 啟用裝置管理員 (取得硬體級瞬間滅屏 lockNow 權限，背光保證歸 0)
-Write-Host "[6/7] 啟用 Device Admin 裝置管理員..." -ForegroundColor Green
-& $adb -s $targetDevice shell dpm set-active-admin com.anysecu.pttbridge/.PocketLockAdminReceiver
-
-# 7. 啟動 PTT Bridge 服務
-Write-Host "[7/7] 啟動 PTT Bridge 背景常駐守護服務..." -ForegroundColor Green
+# 6. 啟動 PTT Bridge 服務
+Write-Host "[6/6] 啟動 PTT Bridge 背景常駐守護服務..." -ForegroundColor Green
 & $adb -s $targetDevice shell am start -n com.anysecu.pttbridge/.MainActivity | Out-Null
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "  部署完成！" -ForegroundColor Green
 Write-Host "  - PTT 側鍵: 零延遲直通 + 硬體級 ALSA-BCLO 佔線禁發" -ForegroundColor Green
-Write-Host "  - 口袋防誤觸鎖定: 長按側邊音量下鍵進入 (背光瞬間歸 0 熄滅，正面按鍵全阻擋)" -ForegroundColor Green
-Write-Host "  - 解除鎖定: 連續按側邊音量下鍵 5 次解鎖點亮螢幕 (具備盲操短嗶音反饋)" -ForegroundColor Green
+Write-Host "  - 口袋防誤觸鎖定: 長按側邊音量下鍵進入 (關閉顯示全黑遮蔽，正面鍵全阻擋)" -ForegroundColor Green
+Write-Host "  - 解除鎖定: 連續按側邊音量下鍵 5 次解鎖退出 (具備盲操短嗶音反饋)" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
 

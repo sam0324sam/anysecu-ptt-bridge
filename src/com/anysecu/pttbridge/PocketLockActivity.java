@@ -12,6 +12,13 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
+/**
+ * 口袋純淨防誤觸鎖定層：
+ * - 關閉畫面顯示 (全螢幕純黑)
+ * - 亮度管理遵循原廠系統預設，不干涉休眠
+ * - 100% 阻擋吞噬正面按鍵 (OK、返回、方向鍵) 與音量+鍵
+ * - 連續點擊音量下鍵 5 次解鎖退出
+ */
 public class PocketLockActivity extends Activity {
     private static final String TAG = "PocketLockActivity";
     private static volatile PocketLockActivity sInstance;
@@ -19,22 +26,6 @@ public class PocketLockActivity extends Activity {
     private int mUnlockClicks = 0;
     private long mLastClickTime = 0;
     private ToneGenerator mToneGenerator;
-    private final android.os.Handler mHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable mAutoSleepRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (isLocked()) {
-                mUnlockClicks = 0;
-                Log.d(TAG, "Inactivity timeout in pocket lock mode -> Lock screen immediately");
-                PttBridgeService.lockScreenImmediately(PocketLockActivity.this);
-            }
-        }
-    };
-
-    private void scheduleAutoSleep() {
-        mHandler.removeCallbacks(mAutoSleepRunnable);
-        mHandler.postDelayed(mAutoSleepRunnable, 3500);
-    }
 
     public static boolean isLocked() {
         return sInstance != null && !sInstance.isFinishing();
@@ -59,7 +50,7 @@ public class PocketLockActivity extends Activity {
         // 綁定音量控制串流，防止音量鍵彈出系統面板或發出系統音效
         setVolumeControlStream(AudioManager.USE_DEFAULT_STREAM_TYPE);
 
-        // 全螢幕純黑、沉浸式、最低背光亮度
+        // 全螢幕沉浸式純黑，關閉內容顯示 (亮度與休眠遵循系統原廠設定)
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window win = getWindow();
         win.addFlags(
@@ -67,10 +58,6 @@ public class PocketLockActivity extends Activity {
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
             WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
         );
-
-        WindowManager.LayoutParams lp = win.getAttributes();
-        lp.screenBrightness = 0.001f; // 最低背光亮度 (全黑)
-        win.setAttributes(lp);
 
         View blackView = new View(this);
         blackView.setBackgroundColor(Color.BLACK);
@@ -82,7 +69,7 @@ public class PocketLockActivity extends Activity {
         );
         setContentView(blackView);
 
-        Log.i(TAG, "PocketLockActivity overlay active (Screen Blackout & All Keys Blocked)");
+        Log.i(TAG, "PocketLockActivity active (Display Blackout & Front Keys Blocked)");
     }
 
     @Override
@@ -119,7 +106,6 @@ public class PocketLockActivity extends Activity {
         // 2. 音量鍵+ (KEYCODE_VOLUME_UP 24)：
         // 徹底吞噬，嚴禁系統發出調整音量嗶嗶聲，嚴禁調整音量！
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == 24) {
-            scheduleAutoSleep();
             return true;
         }
 
@@ -129,13 +115,11 @@ public class PocketLockActivity extends Activity {
             try {
                 sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
             } catch (Exception ignored) {}
-            scheduleAutoSleep();
             return true;
         }
 
         // 4. 正面其餘所有按鍵（方向鍵、OK鍵、菜單鍵等）：
         // 100% 徹底阻擋吞噬，不發出聲音，不傳給底層 Mumla！
-        scheduleAutoSleep();
         return true;
     }
 
@@ -164,8 +148,6 @@ public class PocketLockActivity extends Activity {
         }
         mLastClickTime = now;
 
-        scheduleAutoSleep();
-
         Log.d(TAG, "Volume-Down Click in lock mode: " + mUnlockClicks + "/5");
 
         // 口袋盲操短嗶音反饋 (每實體按下一次滴一聲)
@@ -183,21 +165,12 @@ public class PocketLockActivity extends Activity {
     }
 
     private void unlockAndFinish() {
-        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Restoring brightness and finishing overlay.");
-        mHandler.removeCallbacks(mAutoSleepRunnable);
+        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Finishing overlay.");
         try {
             if (mToneGenerator != null) {
                 // 輕快兩聲確認音「嗶嗶」
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 250);
             }
-        } catch (Exception ignored) {}
-
-        // 恢復正常亮度
-        try {
-            Window win = getWindow();
-            WindowManager.LayoutParams lp = win.getAttributes();
-            lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
-            win.setAttributes(lp);
         } catch (Exception ignored) {}
 
         finish();
@@ -211,7 +184,6 @@ public class PocketLockActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        mHandler.removeCallbacks(mAutoSleepRunnable);
         if (mToneGenerator != null) {
             try { mToneGenerator.release(); } catch (Exception ignored) {}
             mToneGenerator = null;
