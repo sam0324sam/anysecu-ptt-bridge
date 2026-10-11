@@ -145,6 +145,7 @@ public class PttBridgeService extends Service {
             mIsTalking = true;
             Log.d(TAG, "Channel Free -> PTT Down -> Mumla Talk ON");
             sendMumlaTalk("on");
+            ensureScreenOffInLockMode();
         }
     }
 
@@ -158,7 +159,20 @@ public class PttBridgeService extends Service {
             mIsTalking = false;
             Log.d(TAG, "PTT Up -> Mumla Talk OFF");
             sendMumlaTalk("off");
+            ensureScreenOffInLockMode();
         }
+    }
+
+    private void ensureScreenOffInLockMode() {
+        if (!PocketLockActivity.isLocked()) {
+            return;
+        }
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && pm.isInteractive()) {
+                Runtime.getRuntime().exec("input keyevent 26");
+            }
+        } catch (Exception ignored) {}
     }
 
     private synchronized void triggerPocketLock() {
