@@ -483,7 +483,11 @@ public class PttBridgeService extends Service {
         }
 
         try {
-            java.util.Calendar cal = java.util.Calendar.getInstance();
+            java.util.TimeZone tz = java.util.TimeZone.getDefault();
+            if (tz == null || "GMT".equals(tz.getID()) || "UTC".equals(tz.getID())) {
+                tz = java.util.TimeZone.getTimeZone("Asia/Taipei");
+            }
+            java.util.Calendar cal = java.util.Calendar.getInstance(tz);
             int hour24 = cal.get(java.util.Calendar.HOUR_OF_DAY);
             int minute = cal.get(java.util.Calendar.MINUTE);
 
