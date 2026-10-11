@@ -483,26 +483,10 @@ public class PttBridgeService extends Service {
         }
 
         try {
-            java.util.TimeZone tz = java.util.TimeZone.getDefault();
-            if (tz == null || "GMT".equals(tz.getID()) || "UTC".equals(tz.getID())) {
-                tz = java.util.TimeZone.getTimeZone("Asia/Taipei");
-            }
-            java.util.Calendar cal = java.util.Calendar.getInstance(tz);
+            // 完全遵循對講機系統當前時間與時區 (不覆蓋時區)
+            java.util.Calendar cal = java.util.Calendar.getInstance();
             int hour24 = cal.get(java.util.Calendar.HOUR_OF_DAY);
             int minute = cal.get(java.util.Calendar.MINUTE);
-
-            int periodResId;
-            if (hour24 >= 0 && hour24 < 6) {
-                periodResId = R.raw.time_period_dawn;
-            } else if (hour24 >= 6 && hour24 < 12) {
-                periodResId = R.raw.time_period_am;
-            } else if (hour24 == 12) {
-                periodResId = R.raw.time_period_noon;
-            } else if (hour24 > 12 && hour24 < 18) {
-                periodResId = R.raw.time_period_pm;
-            } else {
-                periodResId = R.raw.time_period_night;
-            }
 
             int hour12 = hour24 % 12;
             if (hour12 == 0) {
@@ -517,9 +501,10 @@ public class PttBridgeService extends Service {
                 return;
             }
 
-            Log.i(TAG, "Announcing time: 24h=" + hour24 + ", 12h=" + hour12 + ", min=" + minute);
+            Log.i(TAG, "Announcing concise time: 24h=" + hour24 + " -> " + hour12 + "點 " + minute + "分");
 
-            playSynthesizedWav(new int[]{ R.raw.time_prefix, periodResId, hourResId, minResId });
+            // 極簡報時：直接播報 [小時] + [分鐘]，不說現在時間、不說早上晚上
+            playSynthesizedWav(new int[]{ hourResId, minResId });
         } catch (Exception e) {
             Log.e(TAG, "Failed to announce time: " + e.getMessage(), e);
         }
