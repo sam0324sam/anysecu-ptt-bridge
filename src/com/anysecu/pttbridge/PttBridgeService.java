@@ -69,9 +69,6 @@ public class PttBridgeService extends Service {
     private boolean mBatteryInitialized = false;
     private int mPendingBatteryResId = 0;
 
-    // 音量上鍵長按偵測 (未鎖定狀態)：基於硬體韌體 F3 超時回呼 (MSG_KEY_F3_LONG_PRESS_TIMEOUT) 與音量壓制防護
-    private int mOriginalStreamVol = -1;
-    private long mLastVolUpPressTime = 0;
 
     @Override
     public void onCreate() {
@@ -290,11 +287,6 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
-                            } else if (line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
-                                // 僅由硬體長按音量上鍵觸發語音報時 (短按絕不誤觸報時！)
-                                handleVolumeUpLongPress();
-                            } else if (line.contains("unipro.hotkey.p3.down")) {
-                                handleVolumeUpInitialDown();
                             }
                         }
                     } catch (Exception e) {
@@ -427,60 +419,6 @@ public class PttBridgeService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "Failed to play battery voice: " + e.getMessage());
         }
-    }
-
-    private synchronized void restoreOriginalVolume() {
-        if (mOriginalStreamVol != -1) {
-            try {
-                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
-                }
-            } catch (Exception ignored) {}
-        }
-    }
-
-    private synchronized void handleVolumeUpInitialDown() {
-        if (PocketLockActivity.isLocked()) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        // 連續點擊超過 1.5 秒無動作，視為全新按鍵序列，記錄當前基準音量
-        if (now - mLastVolUpPressTime > 1500) {
-            try {
-                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    mOriginalStreamVol = am.getStreamVolume(AudioManager.STREAM_MUSIC);
-                }
-            } catch (Exception ignored) {}
-        }
-        mLastVolUpPressTime = now;
-    }
-
-    private synchronized void handleVolumeUpLongPress() {
-        if (PocketLockActivity.isLocked()) {
-            return;
-        }
-
-        Log.i(TAG, "Hardware F3 Long Press Timeout detected! Restoring volume and announcing time.");
-
-        // 1. 強制還原音量 (消除長按期間系統自動加滿音量)
-        restoreOriginalVolume();
-
-        // 2. 關閉系統自動彈出的設定畫面 (PhoneWindowManager 預設長按 F3 開啟設定)
-        try {
-            sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
-        } catch (Exception ignored) {}
-
-        // 3. 短促確認提示音
-        try {
-            if (mToneGenerator != null) {
-                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 60);
-            }
-        } catch (Exception ignored) {}
-
-        // 4. 極簡報時
-        announceCurrentTime();
     }
 
     private synchronized void announceCurrentTime() {
