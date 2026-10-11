@@ -189,6 +189,22 @@ public class PttBridgeService extends Service {
         Intent lockIntent = new Intent(this, PocketLockActivity.class);
         lockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(lockIntent);
+
+        // 原廠在長按放開手指時會觸發 policy:KEY 喚醒螢幕！
+        // 在放手後的 600ms 與 1200ms 檢查，若被放手事件點亮，立即強制熄滅背光為 0！
+        scheduleScreenOffCheck(600);
+        scheduleScreenOffCheck(1200);
+    }
+
+    private void scheduleScreenOffCheck(long delayMs) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (PocketLockActivity.isLocked()) {
+                    ensureScreenOffInLockMode();
+                }
+            }
+        }, delayMs);
     }
 
     private void createNotificationChannel() {
