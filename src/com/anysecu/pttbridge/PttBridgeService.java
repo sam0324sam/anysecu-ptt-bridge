@@ -67,6 +67,8 @@ public class PttBridgeService extends Service {
     private volatile long mLastLocalSoundEndTime = 0;
     private ToneGenerator mToneGenerator;
 
+    private AudioManager mAudioManager;
+
     // 發話許可音 (Talk Permit Tone) 與 結束確認音 (Roger Beep)
     private SoundPool mSoundPool;
     private int mPermitSoundId = 0;
@@ -76,7 +78,12 @@ public class PttBridgeService extends Service {
         @Override
         public void run() {
             if (mIsTalking) {
-                Log.d(TAG, "Permit tone played -> Mumla Talk ON");
+                try {
+                    if (mAudioManager != null) {
+                        mAudioManager.setMicrophoneMute(false);
+                    }
+                } catch (Exception ignored) {}
+                Log.d(TAG, "Permit tone finished & Mic unmuted -> Mumla Talk ON");
                 sendMumlaTalk("on");
             }
         }
@@ -94,6 +101,7 @@ public class PttBridgeService extends Service {
         super.onCreate();
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification());
+        mAudioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         try {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
         } catch (Exception ignored) {}
@@ -191,8 +199,8 @@ public class PttBridgeService extends Service {
         mLastLocalSoundEndTime = System.currentTimeMillis() + 80;
         if (mSoundPool != null && mPermitSoundId != 0) {
             try {
-                // 調降音量至適中舒適度 (避免刺耳或外溢)
-                mSoundPool.play(mPermitSoundId, 0.7f, 0.7f, 1, 0, 1.0f);
+                // 調降音量至適中舒適度 (50% 柔和反饋)
+                mSoundPool.play(mPermitSoundId, 0.45f, 0.45f, 1, 0, 1.0f);
             } catch (Exception e) {
                 Log.e(TAG, "playPermitTone error: " + e.getMessage());
             }
@@ -203,8 +211,8 @@ public class PttBridgeService extends Service {
         mLastLocalSoundEndTime = System.currentTimeMillis() + 60;
         if (mSoundPool != null && mEndSoundId != 0) {
             try {
-                // 調降音量至適中舒適度
-                mSoundPool.play(mEndSoundId, 0.7f, 0.7f, 1, 0, 1.0f);
+                // 調降音量至適中舒適度 (50% 柔和反饋)
+                mSoundPool.play(mEndSoundId, 0.45f, 0.45f, 1, 0, 1.0f);
             } catch (Exception e) {
                 Log.e(TAG, "playEndTone error: " + e.getMessage());
             }
@@ -224,10 +232,20 @@ public class PttBridgeService extends Service {
         if (!mIsTalking) {
             mIsTalking = true;
             Log.d(TAG, "Channel Free -> PTT Down -> Play Talk Permit Tone (方案 A)");
+
+            // 1. 立即將全域麥克風硬體靜音，徹底防止揚聲器短音被麥克風捕捉進環形緩衝區
+            try {
+                if (mAudioManager != null) {
+                    mAudioManager.setMicrophoneMute(true);
+                }
+            } catch (Exception ignored) {}
+
+            // 2. 本地播放柔和許可音 (~38ms)
             playPermitTone();
-            // 方案 A: 許可音 (~38ms) 播放完成並保留 42ms 空白緩衝 (共 80ms) 後才向 Mumla 開啟麥克風，徹底杜絕接收端聽到提示音
+
+            // 3. 許可音播完 + 揚聲器消振 + 緩衝清空 (180ms) 後，解除麥克風靜音並向 Mumla 開啟通話
             mMainHandler.removeCallbacks(mStartTalkRunnable);
-            mMainHandler.postDelayed(mStartTalkRunnable, 80);
+            mMainHandler.postDelayed(mStartTalkRunnable, 180);
         }
     }
 
@@ -242,8 +260,29 @@ public class PttBridgeService extends Service {
         if (mIsTalking) {
             mIsTalking = false;
             Log.d(TAG, "PTT Up -> Mumla Talk OFF -> Play Local Roger Beep (方案 A)");
+
+            // 1. 立即停止 Mumla 麥克風音訊串流傳送
             sendMumlaTalk("off");
+
+            // 2. 結束確認音播放期間短暫硬體靜音，防止尾音反饋
+            try {
+                if (mAudioManager != null) {
+                    mAudioManager.setMicrophoneMute(true);
+                }
+            } catch (Exception ignored) {}
+
             playEndTone();
+
+            mMainHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (mAudioManager != null) {
+                            mAudioManager.setMicrophoneMute(false);
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }, 80);
 
             // 若在通話期間有累積待播報的電量語音，通話結束後 350ms 播報
             if (mPendingBatteryResId != 0) {
@@ -256,6 +295,13 @@ public class PttBridgeService extends Service {
                     }
                 }, 350);
             }
+        } else {
+            // 防禦性確保麥克風處於開啟狀態
+            try {
+                if (mAudioManager != null) {
+                    mAudioManager.setMicrophoneMute(false);
+                }
+            } catch (Exception ignored) {}
         }
     }
 
@@ -669,6 +715,11 @@ public class PttBridgeService extends Service {
             mSoundPool = null;
         }
         mMainHandler.removeCallbacksAndMessages(null);
+        if (mAudioManager != null) {
+            try {
+                mAudioManager.setMicrophoneMute(false);
+            } catch (Exception ignored) {}
+        }
         super.onDestroy();
     }
 
