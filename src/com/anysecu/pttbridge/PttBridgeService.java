@@ -80,7 +80,7 @@ public class PttBridgeService extends Service {
         registerPttReceiver();
         registerBatteryReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.5 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery Voice Reports)");
+        Log.i(TAG, "PttBridgeService v1.6 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery & Time Voice Reports)");
     }
 
     /**
@@ -229,7 +229,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (含 ALSA-BCLO 與長按音量下防誤觸)")
+               .setContentText("PTT 守護中 (ALSA-BCLO + 口袋鎖定 + 電量/語音報時)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -248,6 +248,8 @@ public class PttBridgeService extends Service {
                     handlePttDown();
                 } else if ("unipro.hotkey.ptt.up".equals(action) || "android.intent.action.PTT.up".equals(action)) {
                     handlePttUp();
+                } else if ("com.anysecu.pttbridge.action.ANNOUNCE_TIME".equals(action)) {
+                    announceCurrentTime();
                 }
             }
         };
@@ -257,6 +259,7 @@ public class PttBridgeService extends Service {
         filter.addAction("unipro.hotkey.ptt.up");
         filter.addAction("android.intent.action.PTT.down");
         filter.addAction("android.intent.action.PTT.up");
+        filter.addAction("com.anysecu.pttbridge.action.ANNOUNCE_TIME");
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
         registerReceiver(mPttReceiver, filter);
     }
@@ -283,6 +286,9 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
+                            } else if (line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
+                                // 長按音量上鍵觸發生活口語 12 小時制報時
+                                announceCurrentTime();
                             }
                         }
                     } catch (Exception e) {
@@ -414,6 +420,141 @@ public class PttBridgeService extends Service {
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to play battery voice: " + e.getMessage());
+        }
+    }
+
+    private synchronized void announceCurrentTime() {
+        if (mIsTalking) {
+            Log.d(TAG, "Ignore time announcement because PTT is active");
+            return;
+        }
+
+        try {
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            int hour24 = cal.get(java.util.Calendar.HOUR_OF_DAY);
+            int minute = cal.get(java.util.Calendar.MINUTE);
+
+            int periodResId;
+            if (hour24 >= 0 && hour24 < 6) {
+                periodResId = R.raw.time_period_dawn;
+            } else if (hour24 >= 6 && hour24 < 12) {
+                periodResId = R.raw.time_period_am;
+            } else if (hour24 == 12) {
+                periodResId = R.raw.time_period_noon;
+            } else if (hour24 > 12 && hour24 < 18) {
+                periodResId = R.raw.time_period_pm;
+            } else {
+                periodResId = R.raw.time_period_night;
+            }
+
+            int hour12 = hour24 % 12;
+            if (hour12 == 0) {
+                hour12 = 12;
+            }
+
+            int hourResId = getResources().getIdentifier("hour_" + hour12, "raw", getPackageName());
+            int minResId = getResources().getIdentifier("min_" + minute, "raw", getPackageName());
+
+            if (hourResId == 0 || minResId == 0) {
+                Log.e(TAG, "Missing audio res for hour=" + hour12 + " min=" + minute);
+                return;
+            }
+
+            Log.i(TAG, "Announcing time: 24h=" + hour24 + ", 12h=" + hour12 + ", min=" + minute);
+
+            playSynthesizedWav(new int[]{ R.raw.time_prefix, periodResId, hourResId, minResId });
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to announce time: " + e.getMessage(), e);
+        }
+    }
+
+    private synchronized void playSynthesizedWav(int[] resIds) {
+        try {
+            java.io.ByteArrayOutputStream pcmStream = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+
+            for (int resId : resIds) {
+                java.io.InputStream is = getResources().openRawResource(resId);
+                java.io.ByteArrayOutputStream rawStream = new java.io.ByteArrayOutputStream();
+                int read;
+                while ((read = is.read(buf)) != -1) {
+                    rawStream.write(buf, 0, read);
+                }
+                is.close();
+
+                byte[] rawBytes = rawStream.toByteArray();
+                appendPcmData(rawBytes, pcmStream);
+            }
+
+            byte[] allPcm = pcmStream.toByteArray();
+            int totalPcm = allPcm.length;
+
+            java.io.File cacheFile = new java.io.File(getCacheDir(), "current_time.wav");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(cacheFile);
+            java.io.DataOutputStream dos = new java.io.DataOutputStream(fos);
+
+            // WAV Header (44 bytes, 22050Hz, 16bit, Mono)
+            dos.writeBytes("RIFF");
+            dos.writeInt(Integer.reverseBytes(36 + totalPcm));
+            dos.writeBytes("WAVE");
+            dos.writeBytes("fmt ");
+            dos.writeInt(Integer.reverseBytes(16)); // Subchunk1Size
+            dos.writeShort(Short.reverseBytes((short) 1)); // AudioFormat = 1 (PCM)
+            dos.writeShort(Short.reverseBytes((short) 1)); // NumChannels = 1 (Mono)
+            dos.writeInt(Integer.reverseBytes(22050)); // SampleRate
+            dos.writeInt(Integer.reverseBytes(44100)); // ByteRate (22050 * 1 * 2)
+            dos.writeShort(Short.reverseBytes((short) 2)); // BlockAlign
+            dos.writeShort(Short.reverseBytes((short) 16)); // BitsPerSample
+            dos.writeBytes("data");
+            dos.writeInt(Integer.reverseBytes(totalPcm));
+            dos.write(allPcm);
+            dos.flush();
+            dos.close();
+            fos.close();
+
+            if (mMediaPlayer != null) {
+                try {
+                    if (mMediaPlayer.isPlaying()) {
+                        mMediaPlayer.stop();
+                    }
+                    mMediaPlayer.release();
+                } catch (Exception ignored) {}
+                mMediaPlayer = null;
+            }
+
+            mMediaPlayer = new MediaPlayer();
+            mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mMediaPlayer.setDataSource(cacheFile.getAbsolutePath());
+            mMediaPlayer.prepare();
+            mMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                @Override
+                public void onCompletion(MediaPlayer mp) {
+                    try { mp.release(); } catch (Exception ignored) {}
+                    if (mMediaPlayer == mp) {
+                        mMediaPlayer = null;
+                    }
+                }
+            });
+            mMediaPlayer.start();
+        } catch (Exception e) {
+            Log.e(TAG, "Error synthesizing or playing time WAV: " + e.getMessage(), e);
+        }
+    }
+
+    private void appendPcmData(byte[] rawWav, java.io.ByteArrayOutputStream out) {
+        for (int i = 12; i < rawWav.length - 8; i++) {
+            if (rawWav[i] == 0x64 && rawWav[i + 1] == 0x61 && rawWav[i + 2] == 0x74 && rawWav[i + 3] == 0x61) {
+                int dataSize = (rawWav[i + 4] & 0xFF) |
+                               ((rawWav[i + 5] & 0xFF) << 8) |
+                               ((rawWav[i + 6] & 0xFF) << 16) |
+                               ((rawWav[i + 7] & 0xFF) << 24);
+                int start = i + 8;
+                int len = Math.min(dataSize, rawWav.length - start);
+                if (len > 0) {
+                    out.write(rawWav, start, len);
+                }
+                return;
+            }
         }
     }
 

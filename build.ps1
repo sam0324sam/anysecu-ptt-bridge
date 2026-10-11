@@ -33,10 +33,10 @@ $Keystore = Join-Path $ScriptDir "debug.keystore"
 $BinDir = Join-Path $ScriptDir "bin"
 $GenDir = Join-Path $ScriptDir "gen"
 $ResDir = Join-Path $ScriptDir "res"
-$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.5.apk"
+$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.6.apk"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Building Anysecu PTT Bridge (v1.5)      " -ForegroundColor Cyan
+Write-Host "  Building Anysecu PTT Bridge (v1.6)      " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # 2. 清理與建立目錄
