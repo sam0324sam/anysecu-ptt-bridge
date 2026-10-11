@@ -25,6 +25,7 @@ public class PttBridgeService extends Service {
     private static final String MUMLA_PKG = "se.lublin.mumla";
     private static final String MUMLA_ACTION = "se.lublin.mumla.action.TALK";
     private static final long HANGOVER_TIME_MS = 200; // 防搶尾音與斷句緩衝 (200ms)
+    private static final long OK_LONG_PRESS_MS = 4800; // 長按 OK 鍵滿 4.8 秒 (~5 秒) 觸發口袋鎖定
 
     private static final String[] PCM_STATUS_PATHS = new String[] {
         "/proc/asound/card0/pcm0p/sub0/status",
@@ -60,6 +61,10 @@ public class PttBridgeService extends Service {
     private volatile long mLastBusyToneTime = 0;
     private ToneGenerator mToneGenerator;
 
+    // OK 鍵長按計時追蹤
+    private volatile long mOkKeyDownStartTime = 0;
+    private volatile long mLastOkEventTime = 0;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -70,7 +75,7 @@ public class PttBridgeService extends Service {
         } catch (Exception ignored) {}
         registerPttReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.3 started (Hardware ALSA-BCLO Engine)");
+        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Pocket Lock Engine)");
     }
 
     /**
@@ -161,6 +166,43 @@ public class PttBridgeService extends Service {
         }
     }
 
+    private synchronized void handleOkKeyDown() {
+        if (PocketLockActivity.isLocked()) {
+            mOkKeyDownStartTime = 0;
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        // 若兩次事件間隔超過 400ms，視為新的一輪按壓
+        if (now - mLastOkEventTime > 400 || mOkKeyDownStartTime == 0) {
+            mOkKeyDownStartTime = now;
+        }
+        mLastOkEventTime = now;
+
+        // 檢查是否連續按住達 4.8 秒 (~5 秒)
+        if (mOkKeyDownStartTime > 0 && (now - mOkKeyDownStartTime) >= OK_LONG_PRESS_MS) {
+            mOkKeyDownStartTime = 0;
+            triggerPocketLock();
+        }
+    }
+
+    private synchronized void handleOkKeyUp() {
+        mOkKeyDownStartTime = 0;
+    }
+
+    private void triggerPocketLock() {
+        Log.i(TAG, "OK Key held 5s -> Triggering Pocket Lock Mode");
+        try {
+            if (mToneGenerator != null) {
+                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 350);
+            }
+        } catch (Exception ignored) {}
+
+        Intent lockIntent = new Intent(this, PocketLockActivity.class);
+        lockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(lockIntent);
+    }
+
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
@@ -168,7 +210,7 @@ public class PttBridgeService extends Service {
                 "PTT Bridge Service",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Background PTT button bridge for Mumla with ALSA-BCLO");
+            channel.setDescription("Background PTT button bridge for Mumla with ALSA-BCLO & Pocket Lock");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(channel);
@@ -191,7 +233,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (含硬體級佔線禁發 BCLO)")
+               .setContentText("PTT 守護中 (含 ALSA-BCLO 與長按OK口袋鎖定)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -242,6 +284,10 @@ public class PttBridgeService extends Service {
                                 handlePttDown();
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
+                            } else if (line.contains("KEYCODE_DPAD_CENTER = false")) {
+                                handleOkKeyUp();
+                            } else if (line.contains("KEYCODE_DPAD_CENTER = true")) {
+                                handleOkKeyDown();
                             }
                         }
                     } catch (Exception e) {

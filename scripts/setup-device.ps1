@@ -8,9 +8,9 @@ param(
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BaseDir = Split-Path -Parent $ScriptDir
-$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.3.apk"
+$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.4.apk"
 if (-not (Test-Path $PttApk)) {
-    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.2.apk"
+    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.3.apk"
 }
 $MumlaApk = Join-Path $BaseDir "releases\mumla-v3.7.3.apk"
 
@@ -35,39 +35,39 @@ if ($devices.Count -eq 0) {
 
 $targetDevice = if ($DeviceId) { $DeviceId } else { $devices[0] }
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Anysecu 對講機自動設定工具" -ForegroundColor Cyan
+Write-Host "  Anysecu 對講機自動設定工具 (v1.4)" -ForegroundColor Cyan
 Write-Host "  目標裝置: $targetDevice" -ForegroundColor Yellow
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # 1. 停用衝突的內建 Zello
-Write-Host "[1/6] 停用內建 Zello (釋放硬體鍵與防干擾)..." -ForegroundColor Green
+Write-Host "[1/7] 停用內建 Zello (釋放硬體鍵與防干擾)..." -ForegroundColor Green
 & $adb -s $targetDevice shell pm disable-user com.loudtalks | Out-Null
 & $adb -s $targetDevice shell pm disable-user com.zello.ptt | Out-Null
 
 # 2. 調整解析度至 200x240 (讓 Mumla 伺服器編輯頁面能完整顯示帳號密碼欄位)
-Write-Host "[2/6] 調整虛擬解析度至 200x240 (解決小螢幕無法輸入帳密問題)..." -ForegroundColor Green
+Write-Host "[2/7] 調整虛擬解析度至 200x240 (解決小螢幕無法輸入帳密問題)..." -ForegroundColor Green
 & $adb -s $targetDevice shell wm size 200x240
 & $adb -s $targetDevice shell wm density 72
 
 # 3. 安裝 Mumla
 if (Test-Path $MumlaApk) {
-    Write-Host "[3/6] 安裝 Mumla 3.7.3..." -ForegroundColor Green
+    Write-Host "[3/7] 安裝 Mumla 3.7.3..." -ForegroundColor Green
     & $adb -s $targetDevice install -r $MumlaApk
 } else {
-    Write-Host "[3/6] 跳過 Mumla 安裝 (未找到 releases\mumla-v3.7.3.apk)" -ForegroundColor Yellow
+    Write-Host "[3/7] 跳過 Mumla 安裝 (未找到 releases\mumla-v3.7.3.apk)" -ForegroundColor Yellow
 }
 
 # 4. 安裝 Anysecu PTT Bridge
 if (Test-Path $PttApk) {
-    Write-Host "[4/6] 安裝 Anysecu PTT Bridge (v1.1)..." -ForegroundColor Green
+    Write-Host "[4/7] 安裝 Anysecu PTT Bridge (v1.4)..." -ForegroundColor Green
     & $adb -s $targetDevice install -r $PttApk
 } else {
     Write-Error "未找到 PTT Bridge APK: $PttApk"
     exit 1
 }
 
-# 5. 授予 READ_LOGS 特殊權限 (PTT Bridge 攔截底層訊號關鍵)
-Write-Host "[5/6] 授予 READ_LOGS 特殊權限..." -ForegroundColor Green
+# 5. 授予 READ_LOGS 特殊權限
+Write-Host "[5/7] 授予 READ_LOGS 特殊權限..." -ForegroundColor Green
 & $adb -s $targetDevice shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
 
 # 6. 啟動 PTT Bridge 服務
@@ -76,7 +76,7 @@ Write-Host "[6/6] 啟動 PTT Bridge 背景常駐守護服務..." -ForegroundColo
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "  部署完成！" -ForegroundColor Green
-Write-Host "  - PTT 側鍵現在已可直接觸發 Mumla 發話" -ForegroundColor Green
-Write-Host "  - 已啟用 BCLO (佔線禁發) 與防搶尾音保護" -ForegroundColor Green
-Write-Host "  - 螢幕已擴增至 200x240，可手動於 Mumla 輸入帳密" -ForegroundColor Green
+Write-Host "  - PTT 側鍵: 零延遲直通 + 硬體級 ALSA-BCLO 佔線禁發" -ForegroundColor Green
+Write-Host "  - 防誤觸鎖定: 正面長按 OK 鍵 5 秒進入 (關閉螢幕並阻擋其他正面鍵)" -ForegroundColor Green
+Write-Host "  - 解除鎖定: 快速連續按 OK 鍵 5 下解鎖" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green

@@ -1,4 +1,4 @@
-# Anysecu PTT Bridge (Hardware ALSA-BCLO Engine)
+# Anysecu PTT Bridge (Hardware ALSA-BCLO Engine + Pocket Lock)
 
 [![Platform](https://img.shields.io/badge/Platform-Android%208.1%2B-green.svg)](https://android.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,7 +6,7 @@
 [![Companion](https://img.shields.io/badge/Companion-Mumla%20(Mumble)-orange.svg)](https://github.com/mumla-app/mumla)
 
 專為 **Anysecu 實體按鍵對講機**（例如 Anysecu G393, Qualcomm 晶片, Android 8.1 系統）打造的背景常駐 PTT 橋接與對講優化工具。  
-無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，並搭載 **硬體級 ALSA-BCLO（Busy Channel Lockout，佔線禁發）** 與 **防搶尾音保護** 機制，隊友說話時自動攔截 PTT 送話並發出提示音，徹底杜絕搶麥。
+無縫將硬體 PTT 側鍵映射至開源語音客戶端 **Mumla (Mumble)**，並搭載 **硬體級 ALSA-BCLO（Busy Channel Lockout，佔線禁發）**、**防搶尾音保護**，以及專為滑雪/戶外防誤觸設計的 **「口袋防誤觸鎖定 (Pocket Lock Mode)」**。
 
 ---
 
@@ -16,7 +16,11 @@
 - 🚫 **硬體級 ALSA-BCLO 佔線禁發 (Busy Channel Lockout)**：
   - 核心驅動級精準監測：直接讀取 Linux Kernel ALSA 音訊設備狀態 (`/proc/asound/card0/pcm*p/sub0/status`)。
   - **隊友講話中（喇叭有聲）**：按下 PTT 立即阻擋送話並發出短促忙線嗶聲（Busy Beep），絕不撞話。
-  - **頻道空閒時（喇叭靜音）**：按下 PTT 100% 立即發話，**徹底根除 v1.1 之軟體死鎖 Bug**。
+  - **頻道空閒時（喇叭靜音）**：按下 PTT 100% 立即發話，隨按隨說。
+- 🔒 **口袋防誤觸鎖定 (Pocket Lock Mode)**：
+  - **長按 OK 鍵 5 秒鎖定**：播放確認提示音，螢幕背光降至最低全黑（如同熄屏），全面吞噬並阻擋除了 PTT 與 OK 以外的所有正面按鍵，避免置於雪衣或口袋中擠壓誤觸。
+  - **側鍵 PTT 發話不受限**：在全黑鎖定狀態下，側邊 PTT 鍵依然 100% 正常發話，ALSA-BCLO 防搶麥機制同步常駐。
+  - **連按 OK 鍵 5 下解鎖**：盲操連續快速按 OK 鍵 5 下（每次點擊伴隨輕快按鍵提示音），滿 5 下播放雙音確認並解除全黑遮罩，恢復正常操作。
 - ⏱️ **防搶尾音與斷句保護 (200ms Hangover Time)**：
   - 隊友說完話後保留 200ms 緩衝保護，防止語音短暫停頓時被強行截話。
 - ⚡ **開機自動常駐・零磁碟損耗**：
@@ -55,6 +59,11 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
 - 當隊友說話喇叭震動發聲時：該 PCM 設備狀態立即躍遷為 `state: RUNNING`。
 - 透過在微秒級（0.2ms）掃描該硬體檔案，能夠 **100% 精確且無誤判** 地辨識隊友發話狀態，既保證空閒時 100% 隨按隨說，又保證隊友說話時 100% 阻擋搶麥！
 
+### 4. 口袋防誤觸鎖定原理
+- **純 Logcat 偵測長按 5 秒**：原生捕捉 OK 鍵 (`KEYCODE_DPAD_CENTER`) 按住持續時間，滿 4.8 秒時自動啟動 `PocketLockActivity`。
+- **頂層沉浸式全黑視窗**：將背光調整至最低 (`screenBrightness = 0.001f`)，如同螢幕熄滅，並覆寫 `dispatchKeyEvent` 徹底吞噬正面除 OK 鍵外的所有實體按鍵。
+- **快速連點 5 下解鎖**：在口袋內連點 OK 鍵 5 下時，即刻調用 `finish()` 關閉全黑視窗，螢幕瞬間恢復原樣。
+
 ---
 
 ## 🛠️ 快速安裝與自動化設定 (Quick Start)
@@ -69,7 +78,7 @@ Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-
 腳本會自動完成：
 1. 停用衝突的原廠 Zello (`com.loudtalks`, `com.zello.ptt`)
 2. 擴增虛擬解析度至 `200x240` ( density 72 )
-3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.3`
+3. 自動安裝 `Mumla 3.7.3` 與 `Anysecu PTT Bridge v1.4`
 4. 授予關鍵的 `READ_LOGS` 特殊權限
 5. 自動啟動背景守護服務
 
@@ -93,7 +102,7 @@ adb shell wm density 72
 #### 3. 安裝軟體並授權
 ```bash
 adb install -r releases/mumla-v3.7.3.apk
-adb install -r releases/AnysecuPttBridge-v1.3.apk
+adb install -r releases/AnysecuPttBridge-v1.4.apk
 adb shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
 ```
 
@@ -137,7 +146,7 @@ anysecu-ptt-bridge/
 ├── build.ps1                    # 免 IDE 一鍵編譯簽名腳本
 ├── debug.keystore               # 開發測試簽名金鑰
 ├── releases/
-│   ├── AnysecuPttBridge-v1.3.apk # 最新 ALSA-BCLO 硬體級佔線禁發版
+│   ├── AnysecuPttBridge-v1.4.apk # 最新 ALSA-BCLO 硬體級佔線禁發 + 口袋鎖定版
 │   └── mumla-v3.7.3.apk         # 經實測最穩定相容的 Mumla 客戶端
 ├── scripts/
 │   └── setup-device.ps1         # 對講機一鍵佈署與螢幕修復腳本
@@ -145,7 +154,8 @@ anysecu-ptt-bridge/
     └── com/anysecu/pttbridge/
         ├── BootReceiver.java    # 開機自啟廣播接收器
         ├── MainActivity.java    # 狀態顯示與服務喚醒
-        └── PttBridgeService.java# 核心日誌管道監聽與 ALSA-BCLO 佔線阻擋邏輯
+        ├── PocketLockActivity.java # 頂層防誤觸全黑視窗 (連按5下OK解鎖)
+        └── PttBridgeService.java# 核心日誌監聽、ALSA-BCLO 佔線阻擋與 OK長按5秒觸發
 ```
 
 ---

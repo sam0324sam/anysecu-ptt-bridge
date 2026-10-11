@@ -2,8 +2,9 @@
 
 ## 1. 專案核心成果 (Milestone Achieved)
 - **硬體對象**：Anysecu G393 實體按鍵對講機 (Qualcomm MSM8909, Android 8.1.0, 物理螢幕 128x160)。
-- **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」與「防搶尾音 (Hangover Time)」功能。
-- **最終驗證**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲！
+- **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」、「防搶尾音 (Hangover Time)」與專為滑雪/戶外設計的「口袋防誤觸鎖定 (Pocket Lock Mode)」。
+- **目前版本**：v1.4 (ALSA-BCLO 硬體級佔線禁發 + 長按 5 秒 OK 鍵口袋防誤觸鎖定)。
+- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲！
 
 ---
 
@@ -29,6 +30,17 @@
   - 直接在按鍵按下時，耗時 0.2ms 讀取 Linux ALSA 核心狀態 (`/proc/asound/card0/pcm*p/sub0/status`)。
   - 靜止時狀態必定為 `closed`（首字元 `'c'` 極速跳過）；隊友說話喇叭震動時狀態即時躍遷為 `RUNNING`。
 - **優勢**：100% 物理硬體真實狀態反映，徹底杜絕死鎖，實現精準 BCLO 佔線禁發與 200ms 防搶尾音保護。
+
+### ADR-04: 口袋防誤觸鎖定 (Pocket Lock Mode - Logcat + Overlay Activity)
+- **需求與情境**：
+  - 使用者於滑雪或戶外活動時將對講機放在雪衣口袋，正面豐富的實體方向鍵、返回鍵容易因身體壓迫而誤觸退出 Mumla 或變更頻道。
+  - 需要在不點螢幕、不切換 App 的前提下，實現：正面長按 OK 鍵 5 秒 -> 關閉螢幕（背光調至最低純黑），阻擋除了 PTT 與 OK 以外的所有正面按鍵；解鎖方法為連點 OK 鍵 5 下。
+- **實作架構**：
+  - **捨棄 AccessibilityService**：Android 8.1 韌體下 shell 無法設定 `enabled_accessibility_services`，且使用者介面無法觸控點擊啟用。
+  - **純 Logcat 偵測長按 5 秒**：Service 藉由監聽 `WindowManager:D` 中的 `KEYCODE_DPAD_CENTER` 連續按壓事件累積滿 4.8 秒，發出提示音並啟動 `PocketLockActivity`。
+  - **全黑純黑遮罩與背光最低**：`PocketLockActivity` 設定 `screenBrightness = 0.001f` 及沉浸式全螢幕，如同熄屏。
+  - **全按鍵吞噬與 5 次連擊判定**：覆寫 `dispatchKeyEvent`，對正面除 OK 鍵外的所有按鍵一律 `return true` 吃掉；OK 鍵在 800ms 窗口內累計連點 5 下即調用 `finish()` 解除鎖定並播放確認音。
+  - **PTT 直通不受影響**：PTT 側鍵走硬體 F1 logcat 管道，在鎖定狀態下依然 100% 正常通話並具備 ALSA-BCLO 守護。
 
 ---
 

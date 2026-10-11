@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Anysecu PTT Bridge</string>
+    <string name="accessibility_service_label">PTT 防誤觸口袋鎖定服務</string>
+    <string name="accessibility_service_desc">長按 OK 鍵 5 秒鎖定正面按鍵與螢幕，連按 OK 鍵 5 下解鎖</string>
+</resources>
