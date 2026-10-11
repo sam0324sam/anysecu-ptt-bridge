@@ -1,6 +1,7 @@
 package com.anysecu.pttbridge;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
@@ -39,6 +40,9 @@ public class PocketLockActivity extends Activity {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
         } catch (Exception ignored) {}
 
+        // 綁定音量控制串流，防止音量鍵彈出系統面板或發出系統音效
+        setVolumeControlStream(AudioManager.USE_DEFAULT_STREAM_TYPE);
+
         // 全螢幕純黑、沉浸式、最低背光亮度
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window win = getWindow();
@@ -66,6 +70,17 @@ public class PocketLockActivity extends Activity {
         Log.i(TAG, "PocketLockActivity overlay active (Screen Blackout & All Keys Blocked)");
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // 若系統關機選單或任何 System Dialog 嘗試搶奪焦點，立即強制關閉！
+        if (!hasFocus && isLocked()) {
+            try {
+                sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            } catch (Exception ignored) {}
+        }
+    }
+
     private boolean isVolumeDownKey(int keyCode) {
         return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == 25;
     }
@@ -75,7 +90,7 @@ public class PocketLockActivity extends Activity {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
-        // 1. 解鎖鍵：只響應「音量下鍵」的 ACTION_DOWN 按下事件，且 repeatCount 必須為 0 (防止按住連發)
+        // 1. 解鎖鍵：只響應「音量下鍵」的 ACTION_DOWN 按下事件，且 repeatCount 必須為 0
         if (isVolumeDownKey(keyCode)) {
             if (action == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() == 0) {
@@ -86,8 +101,33 @@ public class PocketLockActivity extends Activity {
             return true;
         }
 
-        // 2. 正面其餘所有按鍵（方向鍵、返回鍵、OK鍵、菜單鍵等）：
+        // 2. 音量鍵+ (KEYCODE_VOLUME_UP 24)：
+        // 徹底吞噬，嚴禁系統發出調整音量嗶嗶聲，嚴禁調整音量！
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == 24) {
+            return true;
+        }
+
+        // 3. 返回鍵 (KEYCODE_BACK 4)：
+        // 防止長按返回鍵彈出系統關機選單，發送廣播秒殺對話框！
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == 4) {
+            try {
+                sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        // 4. 正面其餘所有按鍵（方向鍵、OK鍵、菜單鍵等）：
         // 100% 徹底阻擋吞噬，不發出聲音，不傳給底層 Mumla！
+        return true;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        return true;
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
         return true;
     }
 
@@ -123,7 +163,7 @@ public class PocketLockActivity extends Activity {
     }
 
     private void unlockAndFinish() {
-        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Finishing overlay.");
+        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Restoring brightness and finishing overlay.");
         try {
             if (mToneGenerator != null) {
                 // 輕快兩聲確認音「嗶嗶」
