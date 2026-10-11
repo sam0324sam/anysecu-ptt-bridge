@@ -17,6 +17,10 @@ import android.util.Log;
 import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public class PttBridgeService extends Service {
     private static final String TAG = "AnysecuPttBridge";
@@ -61,9 +65,10 @@ public class PttBridgeService extends Service {
     private volatile long mLastBusyToneTime = 0;
     private ToneGenerator mToneGenerator;
 
-    // OK 鍵長按計時追蹤
-    private volatile long mOkKeyDownStartTime = 0;
-    private volatile long mLastOkEventTime = 0;
+    // OK 鍵長按定時器架構
+    private final ScheduledExecutorService mScheduler = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> mOkLongPressFuture = null;
+    private volatile boolean mIsOkDown = false;
 
     @Override
     public void onCreate() {
@@ -75,7 +80,7 @@ public class PttBridgeService extends Service {
         } catch (Exception ignored) {}
         registerPttReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Pocket Lock Engine)");
+        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Precise OK Timer)");
     }
 
     /**
@@ -166,32 +171,49 @@ public class PttBridgeService extends Service {
         }
     }
 
-    private synchronized void handleOkKeyDown() {
+    private synchronized void handleOkKeyLogEvent() {
         if (PocketLockActivity.isLocked()) {
-            mOkKeyDownStartTime = 0;
+            cancelOkTimer();
             return;
         }
 
-        long now = System.currentTimeMillis();
-        // 若兩次事件間隔超過 400ms，視為新的一輪按壓
-        if (now - mLastOkEventTime > 400 || mOkKeyDownStartTime == 0) {
-            mOkKeyDownStartTime = now;
+        if (!mIsOkDown) {
+            // 第一次收到 keycode=23 -> Key Down！啟動 4.8 秒鎖定定時器
+            mIsOkDown = true;
+            Log.d(TAG, "OK Key Down detected -> Starting 4.8s Timer");
+            if (mOkLongPressFuture != null) {
+                mOkLongPressFuture.cancel(false);
+            }
+            mOkLongPressFuture = mScheduler.schedule(new Runnable() {
+                @Override
+                public void run() {
+                    onOkLongPressTimeout();
+                }
+            }, OK_LONG_PRESS_MS, TimeUnit.MILLISECONDS);
+        } else {
+            // 第二次收到 keycode=23 -> Key Up！放開按鍵，取消定時器
+            Log.d(TAG, "OK Key Up detected -> Cancelling Timer");
+            cancelOkTimer();
         }
-        mLastOkEventTime = now;
+    }
 
-        // 檢查是否連續按住達 4.8 秒 (~5 秒)
-        if (mOkKeyDownStartTime > 0 && (now - mOkKeyDownStartTime) >= OK_LONG_PRESS_MS) {
-            mOkKeyDownStartTime = 0;
+    private synchronized void cancelOkTimer() {
+        mIsOkDown = false;
+        if (mOkLongPressFuture != null) {
+            mOkLongPressFuture.cancel(false);
+            mOkLongPressFuture = null;
+        }
+    }
+
+    private synchronized void onOkLongPressTimeout() {
+        if (mIsOkDown && !PocketLockActivity.isLocked()) {
+            Log.i(TAG, "OK Key 4.8s timer fired! Activating Pocket Lock");
+            mIsOkDown = false;
             triggerPocketLock();
         }
     }
 
-    private synchronized void handleOkKeyUp() {
-        mOkKeyDownStartTime = 0;
-    }
-
     private void triggerPocketLock() {
-        Log.i(TAG, "OK Key held 5s -> Triggering Pocket Lock Mode");
         try {
             if (mToneGenerator != null) {
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 350);
@@ -249,6 +271,7 @@ public class PttBridgeService extends Service {
                 if (intent == null || intent.getAction() == null) return;
                 String action = intent.getAction();
                 if ("unipro.hotkey.ptt.down".equals(action) || "android.intent.action.PTT.down".equals(action)) {
+                    cancelOkTimer();
                     handlePttDown();
                 } else if ("unipro.hotkey.ptt.up".equals(action) || "android.intent.action.PTT.up".equals(action)) {
                     handlePttUp();
@@ -281,13 +304,14 @@ public class PttBridgeService extends Service {
                         String line;
                         while (mRunning && (line = reader.readLine()) != null) {
                             if (line.contains("unipro.hotkey.ptt.down")) {
+                                cancelOkTimer();
                                 handlePttDown();
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
-                            } else if (line.contains("KEYCODE_DPAD_CENTER = false")) {
-                                handleOkKeyUp();
-                            } else if (line.contains("KEYCODE_DPAD_CENTER = true")) {
-                                handleOkKeyDown();
+                            } else if (line.contains("interceptKeyTq keycode=23")) {
+                                handleOkKeyLogEvent();
+                            } else if (line.contains("KEYCODE_DPAD_CENTER")) {
+                                cancelOkTimer();
                             }
                         }
                     } catch (Exception e) {
@@ -324,6 +348,8 @@ public class PttBridgeService extends Service {
     @Override
     public void onDestroy() {
         mRunning = false;
+        cancelOkTimer();
+        mScheduler.shutdownNow();
         if (mLogcatProcess != null) {
             mLogcatProcess.destroy();
             mLogcatProcess = null;
