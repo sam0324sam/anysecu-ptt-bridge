@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
+import android.app.admin.DevicePolicyManager;
+import android.content.ComponentName;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
@@ -163,25 +165,26 @@ public class PttBridgeService extends Service {
         }
     }
 
-    private volatile long mLastScreenOffCmdTime = 0;
+    public static void lockScreenImmediately(Context context) {
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName admin = new ComponentName(context, PocketLockAdminReceiver.class);
+            if (dpm != null && dpm.isAdminActive(admin)) {
+                Log.i(TAG, "Executing DevicePolicyManager.lockNow() (Display -> OFF, Backlight -> 0)");
+                dpm.lockNow();
+            } else {
+                Log.w(TAG, "Device Admin is NOT active. Please activate with: adb shell dpm set-active-admin com.anysecu.pttbridge/.PocketLockAdminReceiver");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to lock screen via DevicePolicyManager: " + e.getMessage());
+        }
+    }
 
     private synchronized void ensureScreenOffInLockMode() {
         if (!PocketLockActivity.isLocked()) {
             return;
         }
-        long now = System.currentTimeMillis();
-        // 至少間隔 1200ms 防抖，嚴禁連續觸發電源鍵相機手勢！
-        if (now - mLastScreenOffCmdTime < 1200) {
-            return;
-        }
-
-        try {
-            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null && pm.isInteractive()) {
-                mLastScreenOffCmdTime = now;
-                Runtime.getRuntime().exec("input keyevent 26");
-            }
-        } catch (Exception ignored) {}
+        lockScreenImmediately(this);
     }
 
     private synchronized void triggerPocketLock() {
@@ -200,13 +203,13 @@ public class PttBridgeService extends Service {
         startActivity(lockIntent);
 
         // 使用者聽到提示音後放開手指 (約 300~500ms)，原廠放手事件會喚醒螢幕；
-        // 我們在 800ms 精準執行一次滅屏，背光直接歸 0 熄滅！
+        // 我們在 500ms 執行 lockScreenImmediately()，背光直接歸 0 熄滅！
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
             @Override
             public void run() {
                 ensureScreenOffInLockMode();
             }
-        }, 800);
+        }, 500);
     }
 
     private void createNotificationChannel() {

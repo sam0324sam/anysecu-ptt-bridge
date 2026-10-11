@@ -19,6 +19,22 @@ public class PocketLockActivity extends Activity {
     private int mUnlockClicks = 0;
     private long mLastClickTime = 0;
     private ToneGenerator mToneGenerator;
+    private final android.os.Handler mHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable mAutoSleepRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (isLocked()) {
+                mUnlockClicks = 0;
+                Log.d(TAG, "Inactivity timeout in pocket lock mode -> Lock screen immediately");
+                PttBridgeService.lockScreenImmediately(PocketLockActivity.this);
+            }
+        }
+    };
+
+    private void scheduleAutoSleep() {
+        mHandler.removeCallbacks(mAutoSleepRunnable);
+        mHandler.postDelayed(mAutoSleepRunnable, 3500);
+    }
 
     public static boolean isLocked() {
         return sInstance != null && !sInstance.isFinishing();
@@ -103,6 +119,7 @@ public class PocketLockActivity extends Activity {
         // 2. 音量鍵+ (KEYCODE_VOLUME_UP 24)：
         // 徹底吞噬，嚴禁系統發出調整音量嗶嗶聲，嚴禁調整音量！
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == 24) {
+            scheduleAutoSleep();
             return true;
         }
 
@@ -112,11 +129,13 @@ public class PocketLockActivity extends Activity {
             try {
                 sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
             } catch (Exception ignored) {}
+            scheduleAutoSleep();
             return true;
         }
 
         // 4. 正面其餘所有按鍵（方向鍵、OK鍵、菜單鍵等）：
         // 100% 徹底阻擋吞噬，不發出聲音，不傳給底層 Mumla！
+        scheduleAutoSleep();
         return true;
     }
 
@@ -145,6 +164,8 @@ public class PocketLockActivity extends Activity {
         }
         mLastClickTime = now;
 
+        scheduleAutoSleep();
+
         Log.d(TAG, "Volume-Down Click in lock mode: " + mUnlockClicks + "/5");
 
         // 口袋盲操短嗶音反饋 (每實體按下一次滴一聲)
@@ -163,6 +184,7 @@ public class PocketLockActivity extends Activity {
 
     private void unlockAndFinish() {
         Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Restoring brightness and finishing overlay.");
+        mHandler.removeCallbacks(mAutoSleepRunnable);
         try {
             if (mToneGenerator != null) {
                 // 輕快兩聲確認音「嗶嗶」
@@ -189,6 +211,7 @@ public class PocketLockActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mHandler.removeCallbacks(mAutoSleepRunnable);
         if (mToneGenerator != null) {
             try { mToneGenerator.release(); } catch (Exception ignored) {}
             mToneGenerator = null;
