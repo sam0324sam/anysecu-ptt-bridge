@@ -26,6 +26,8 @@ public class PocketLockActivity extends Activity {
     private int mUnlockClicks = 0;
     private long mLastClickTime = 0;
     private ToneGenerator mToneGenerator;
+    private android.media.SoundPool mSoundPool;
+    private int mClickSoundId = 0;
 
     private final android.os.Handler mVolUpHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean mVolUpLongPressTriggered = false;
@@ -63,6 +65,19 @@ public class PocketLockActivity extends Activity {
 
         try {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
+        } catch (Exception ignored) {}
+
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+                mSoundPool = new android.media.SoundPool.Builder().setMaxStreams(5).setAudioAttributes(attrs).build();
+            } else {
+                mSoundPool = new android.media.SoundPool(5, android.media.AudioManager.STREAM_SYSTEM, 0);
+            }
+            mClickSoundId = mSoundPool.load(this, R.raw.key_click, 1);
         } catch (Exception ignored) {}
 
         // 綁定音量控制串流，防止音量鍵彈出系統面板或發出系統音效
@@ -122,12 +137,12 @@ public class PocketLockActivity extends Activity {
         }
 
         // 2. 音量鍵+ (KEYCODE_VOLUME_UP 24)：
-        // 長按 750ms 觸發語音報時，短按吞噬不調整音量
+        // 長按 500ms 觸發語音報時，短按吞噬不調整音量
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == 24) {
             if (action == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() == 0) {
                     mVolUpLongPressTriggered = false;
-                    mVolUpHandler.postDelayed(mVolUpLongPressRunnable, 750);
+                    mVolUpHandler.postDelayed(mVolUpLongPressRunnable, 500);
                 }
             } else if (action == KeyEvent.ACTION_UP) {
                 mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
@@ -162,8 +177,8 @@ public class PocketLockActivity extends Activity {
     private synchronized void onUnlockClick() {
         long now = System.currentTimeMillis();
 
-        // 80ms 靈敏防抖 (消除按鍵過濾延遲，支援極速同頻連按)
-        if (now - mLastClickTime < 80) {
+        // 40ms 極限靈敏防抖 (消除按鍵過濾延遲，支援極速同頻 5 連按)
+        if (now - mLastClickTime < 40) {
             return;
         }
 
@@ -176,12 +191,14 @@ public class PocketLockActivity extends Activity {
 
         Log.d(TAG, "Volume-Down Click in lock mode: " + mUnlockClicks + "/5");
 
-        // 口袋盲操極速短促滴聲反饋 (25ms，清脆零延遲)
-        try {
-            if (mToneGenerator != null) {
+        // 口袋盲操極速短促滴聲反饋 (25ms SoundPool，記憶體常駐零延遲，支援多聲道混音)
+        if (mSoundPool != null && mClickSoundId != 0) {
+            mSoundPool.play(mClickSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+        } else if (mToneGenerator != null) {
+            try {
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 25);
-            }
-        } catch (Exception ignored) {}
+            } catch (Exception ignored) {}
+        }
 
         // 連續按下滿 5 次解鎖！
         if (mUnlockClicks >= 5) {
@@ -211,6 +228,10 @@ public class PocketLockActivity extends Activity {
     @Override
     protected void onDestroy() {
         mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
+        if (mSoundPool != null) {
+            try { mSoundPool.release(); } catch (Exception ignored) {}
+            mSoundPool = null;
+        }
         if (mToneGenerator != null) {
             try { mToneGenerator.release(); } catch (Exception ignored) {}
             mToneGenerator = null;

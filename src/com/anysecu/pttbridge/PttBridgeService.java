@@ -69,12 +69,37 @@ public class PttBridgeService extends Service {
     private boolean mBatteryInitialized = false;
     private int mPendingBatteryResId = 0;
 
-    // 音量上鍵長按偵測 (未鎖定狀態)
-    private long mFirstVolUpTime = 0;
-    private long mLastVolUpTime = 0;
-    private int mVolUpRepeatCount = 0;
+    // 音量上鍵長按偵測 (未鎖定狀態)：主動定時器狀態機 (500ms) 與音量壓制保護
+    private final android.os.Handler mVolUpHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean mVolUpPressed = false;
     private boolean mVolUpAnnounced = false;
     private int mOriginalStreamVol = -1;
+    private long mLastVolUpDownTime = 0;
+    private final Runnable mVolUpLongPressRunnable = new Runnable() {
+        @Override
+        public void run() {
+            synchronized (PttBridgeService.this) {
+                if (!mVolUpPressed) {
+                    return;
+                }
+                mVolUpAnnounced = true;
+                Log.i(TAG, "Volume-Up Long Press triggered by timer (500ms)! Suppressing volume and announcing time.");
+
+                // 1. 強制壓制音量回原值 (消除系統長按加滿音量的副作用)
+                restoreOriginalVolume();
+
+                // 2. 短促提示確認音
+                try {
+                    if (mToneGenerator != null) {
+                        mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 50);
+                    }
+                } catch (Exception ignored) {}
+
+                // 3. 播報當前極簡時間
+                announceCurrentTime();
+            }
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -282,7 +307,7 @@ public class PttBridgeService extends Service {
                             Runtime.getRuntime().exec("logcat -b system -c").waitFor();
                         } catch (Exception ignored) {}
 
-                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-s", "WindowManager:D"});
+                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-s", "WindowManager:D", "MediaSessionService:D"});
                         BufferedReader reader = new BufferedReader(new InputStreamReader(mLogcatProcess.getInputStream()));
                         String line;
                         while (mRunning && (line = reader.readLine()) != null) {
@@ -293,8 +318,12 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
-                            } else if (line.contains("unipro.hotkey.p3.down") || line.contains("keycode=24") || line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT")) {
-                                handleVolumeUpEvent();
+                            } else if (line.contains("unipro.hotkey.p3.down") ||
+                                       line.contains("MSG_KEY_F3_LONG_PRESS_TIMEOUT") ||
+                                       (line.contains("KEYCODE_VOLUME_UP") && line.contains("ACTION_DOWN"))) {
+                                handleVolumeUpDown();
+                            } else if (line.contains("KEYCODE_VOLUME_UP") && line.contains("ACTION_UP")) {
+                                handleVolumeUpUp();
                             }
                         }
                     } catch (Exception e) {
@@ -429,61 +458,68 @@ public class PttBridgeService extends Service {
         }
     }
 
-    private synchronized void handleVolumeUpEvent() {
+    private synchronized void restoreOriginalVolume() {
+        if (mOriginalStreamVol != -1) {
+            try {
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private synchronized void handleVolumeUpDown() {
+        if (PocketLockActivity.isLocked()) {
+            return;
+        }
+
         long now = System.currentTimeMillis();
-        // 間隔超過 1200ms 視為新的一次按鍵起始 (包容 logd chatty 壓縮導致的 700~900ms 延遲)
-        if (now - mLastVolUpTime > 1200) {
-            mFirstVolUpTime = now;
-            mLastVolUpTime = now;
-            mVolUpRepeatCount = 1;
+
+        // 逾時保護：若距離上次按下超過 2500ms 且狀態未釋放，強制重置狀態機
+        if (mVolUpPressed && (now - mLastVolUpDownTime > 2500)) {
+            mVolUpPressed = false;
             mVolUpAnnounced = false;
+        }
+
+        if (!mVolUpPressed) {
+            mVolUpPressed = true;
+            mVolUpAnnounced = false;
+            mLastVolUpDownTime = now;
             try {
                 AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
                 if (am != null) {
                     mOriginalStreamVol = am.getStreamVolume(AudioManager.STREAM_MUSIC);
                 }
             } catch (Exception ignored) {}
+
+            mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
+            mVolUpHandler.postDelayed(mVolUpLongPressRunnable, 500);
+            Log.d(TAG, "Volume-Up Down: scheduled long press timer in 500ms, original vol=" + mOriginalStreamVol);
+        } else {
+            // 長按持續中 (按鍵 repeat)
+            mLastVolUpDownTime = now;
+            if (mVolUpAnnounced) {
+                // 已播報時間，長按期間持續壓制音量防止灌滿
+                restoreOriginalVolume();
+            }
+        }
+    }
+
+    private synchronized void handleVolumeUpUp() {
+        if (PocketLockActivity.isLocked()) {
             return;
         }
 
-        mLastVolUpTime = now;
-        mVolUpRepeatCount++;
-
+        mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
         if (mVolUpAnnounced) {
-            // 長按期間持續壓制音量，防止 Android 系統持續將音量按鍵 repeat 灌滿！
-            if (mOriginalStreamVol != -1) {
-                try {
-                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                    if (am != null) {
-                        am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
-                    }
-                } catch (Exception ignored) {}
-            }
-            return;
+            Log.d(TAG, "Volume-Up Up after long press: restored volume to " + mOriginalStreamVol);
+            restoreOriginalVolume();
+        } else {
+            Log.d(TAG, "Volume-Up Up (Short press, canceled 500ms timer)");
         }
-
-        // 當累積按住時間 >= 500ms，且收到至少 2 次事件，且尚未播報：判定為長按！
-        if (now - mFirstVolUpTime >= 500 && mVolUpRepeatCount >= 2) {
-            mVolUpAnnounced = true;
-            Log.i(TAG, "Volume-Up Long Press detected in background (" + (now - mFirstVolUpTime) + "ms, count=" + mVolUpRepeatCount + ")");
-
-            if (mOriginalStreamVol != -1) {
-                try {
-                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                    if (am != null) {
-                        am.setStreamVolume(AudioManager.STREAM_MUSIC, mOriginalStreamVol, 0);
-                    }
-                } catch (Exception ignored) {}
-            }
-
-            try {
-                if (mToneGenerator != null) {
-                    mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 50);
-                }
-            } catch (Exception ignored) {}
-
-            announceCurrentTime();
-        }
+        mVolUpPressed = false;
+        mVolUpAnnounced = false;
     }
 
     private synchronized void announceCurrentTime() {
@@ -618,6 +654,7 @@ public class PttBridgeService extends Service {
     @Override
     public void onDestroy() {
         mRunning = false;
+        mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
         if (mLogcatProcess != null) {
             mLogcatProcess.destroy();
             mLogcatProcess = null;
