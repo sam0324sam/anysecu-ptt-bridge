@@ -145,7 +145,6 @@ public class PttBridgeService extends Service {
             mIsTalking = true;
             Log.d(TAG, "Channel Free -> PTT Down -> Mumla Talk ON");
             sendMumlaTalk("on");
-            ensureScreenOffInLockMode();
         }
     }
 
@@ -159,17 +158,27 @@ public class PttBridgeService extends Service {
             mIsTalking = false;
             Log.d(TAG, "PTT Up -> Mumla Talk OFF");
             sendMumlaTalk("off");
+            // 放開 PTT 說完話後，確保滅屏！
             ensureScreenOffInLockMode();
         }
     }
 
-    private void ensureScreenOffInLockMode() {
+    private volatile long mLastScreenOffCmdTime = 0;
+
+    private synchronized void ensureScreenOffInLockMode() {
         if (!PocketLockActivity.isLocked()) {
             return;
         }
+        long now = System.currentTimeMillis();
+        // 至少間隔 1200ms 防抖，嚴禁連續觸發電源鍵相機手勢！
+        if (now - mLastScreenOffCmdTime < 1200) {
+            return;
+        }
+
         try {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null && pm.isInteractive()) {
+                mLastScreenOffCmdTime = now;
                 Runtime.getRuntime().exec("input keyevent 26");
             }
         } catch (Exception ignored) {}
@@ -190,21 +199,14 @@ public class PttBridgeService extends Service {
         lockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(lockIntent);
 
-        // 原廠在長按放開手指時會觸發 policy:KEY 喚醒螢幕！
-        // 在放手後的 600ms 與 1200ms 檢查，若被放手事件點亮，立即強制熄滅背光為 0！
-        scheduleScreenOffCheck(600);
-        scheduleScreenOffCheck(1200);
-    }
-
-    private void scheduleScreenOffCheck(long delayMs) {
+        // 使用者聽到提示音後放開手指 (約 300~500ms)，原廠放手事件會喚醒螢幕；
+        // 我們在 800ms 精準執行一次滅屏，背光直接歸 0 熄滅！
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (PocketLockActivity.isLocked()) {
-                    ensureScreenOffInLockMode();
-                }
+                ensureScreenOffInLockMode();
             }
-        }, delayMs);
+        }, 800);
     }
 
     private void createNotificationChannel() {
