@@ -23,6 +23,19 @@ public class PocketLockActivity extends Activity {
         return sInstance != null && !sInstance.isFinishing();
     }
 
+    public static synchronized void registerUnlockClick() {
+        if (sInstance != null && !sInstance.isFinishing()) {
+            sInstance.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (sInstance != null && !sInstance.isFinishing()) {
+                        sInstance.onUnlockClick();
+                    }
+                }
+            });
+        }
+    }
+
     public static void dismiss() {
         if (sInstance != null && !sInstance.isFinishing()) {
             sInstance.finish();
@@ -50,7 +63,7 @@ public class PocketLockActivity extends Activity {
         );
 
         WindowManager.LayoutParams lp = win.getAttributes();
-        lp.screenBrightness = 0.001f; // 最低背光亮度
+        lp.screenBrightness = 0.001f; // 最低背光亮度 (全黑)
         win.setAttributes(lp);
 
         View blackView = new View(this);
@@ -63,15 +76,50 @@ public class PocketLockActivity extends Activity {
         );
         setContentView(blackView);
 
-        Log.i(TAG, "PocketLockActivity overlay active (Screen Blackout & Front Keys Blocked)");
+        Log.i(TAG, "PocketLockActivity overlay active (Screen Blackout & Keys Blocked)");
     }
 
-    private boolean isOkKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER
-            || keyCode == KeyEvent.KEYCODE_ENTER
+    private boolean isUnlockKey(int keyCode) {
+        // 音量下鍵 (KEYCODE_VOLUME_DOWN 25, F4 134) 或 OK 鍵 (23, 66)
+        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+            || keyCode == 25
+            || keyCode == KeyEvent.KEYCODE_F4
+            || keyCode == 134
+            || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
             || keyCode == 23
-            || keyCode == 66
-            || keyCode == 353;
+            || keyCode == KeyEvent.KEYCODE_ENTER
+            || keyCode == 66;
+    }
+
+    public synchronized void onUnlockClick() {
+        long now = System.currentTimeMillis();
+
+        // 100ms 去重防抖（防止 dispatchKeyEvent 與 logcat 同步收到時重複計數）
+        if (now - mLastClickTime < 100) {
+            return;
+        }
+
+        if (now - mLastClickTime < 800) {
+            mUnlockClicks++;
+        } else {
+            mUnlockClicks = 1;
+        }
+        mLastClickTime = now;
+
+        Log.d(TAG, "Unlock Click in lock mode: " + mUnlockClicks + "/5");
+
+        // 按鍵回饋音 (短嗶一聲)
+        try {
+            if (mToneGenerator != null) {
+                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 35);
+            }
+        } catch (Exception ignored) {}
+
+        // 連續點擊滿 5 下 -> 解鎖！
+        if (mUnlockClicks >= 5) {
+            mUnlockClicks = 0;
+            unlockAndFinish();
+        }
     }
 
     @Override
@@ -79,33 +127,12 @@ public class PocketLockActivity extends Activity {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
-        // 1. 如果按下的是 OK 鍵：檢測快速連點 5 下解鎖
-        if (isOkKey(keyCode)) {
+        // 1. 如果按下的是解鎖鍵 (音量下鍵 / OK 鍵)：檢測連點 5 下解鎖
+        if (isUnlockKey(keyCode)) {
             if (action == KeyEvent.ACTION_DOWN) {
-                long now = System.currentTimeMillis();
-                if (now - mLastClickTime < 800) {
-                    mUnlockClicks++;
-                } else {
-                    mUnlockClicks = 1;
-                }
-                mLastClickTime = now;
-
-                Log.d(TAG, "OK Click in lock mode: " + mUnlockClicks + "/5");
-
-                // 按鍵回饋音 (短嗶一聲)
-                try {
-                    if (mToneGenerator != null) {
-                        mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 35);
-                    }
-                } catch (Exception ignored) {}
-
-                // 連續點擊滿 5 下 -> 解鎖！
-                if (mUnlockClicks >= 5) {
-                    mUnlockClicks = 0;
-                    unlockAndFinish();
-                }
+                onUnlockClick();
             }
-            return true; // 吃掉 OK 鍵，不傳遞給底層
+            return true; // 吃掉按鍵，不改變音量，不傳給底層
         }
 
         // 2. 正面其餘所有按鍵（返回、方向、功能鍵等）全部 100% 徹底阻擋吞噬！
@@ -113,12 +140,20 @@ public class PocketLockActivity extends Activity {
     }
 
     private void unlockAndFinish() {
-        Log.i(TAG, "Unlocked by 5 OK clicks! Finishing overlay.");
+        Log.i(TAG, "Unlocked by 5 clicks! Restoring brightness and finishing overlay.");
         try {
             if (mToneGenerator != null) {
                 // 輕快兩聲確認音「嗶嗶」
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 250);
             }
+        } catch (Exception ignored) {}
+
+        // 恢復正常亮度
+        try {
+            Window win = getWindow();
+            WindowManager.LayoutParams lp = win.getAttributes();
+            lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            win.setAttributes(lp);
         } catch (Exception ignored) {}
 
         finish();

@@ -17,10 +17,6 @@ import android.util.Log;
 import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 public class PttBridgeService extends Service {
     private static final String TAG = "AnysecuPttBridge";
@@ -29,7 +25,6 @@ public class PttBridgeService extends Service {
     private static final String MUMLA_PKG = "se.lublin.mumla";
     private static final String MUMLA_ACTION = "se.lublin.mumla.action.TALK";
     private static final long HANGOVER_TIME_MS = 200; // 防搶尾音與斷句緩衝 (200ms)
-    private static final long OK_LONG_PRESS_MS = 4800; // 長按 OK 鍵滿 4.8 秒 (~5 秒) 觸發口袋鎖定
 
     private static final String[] PCM_STATUS_PATHS = new String[] {
         "/proc/asound/card0/pcm0p/sub0/status",
@@ -65,11 +60,6 @@ public class PttBridgeService extends Service {
     private volatile long mLastBusyToneTime = 0;
     private ToneGenerator mToneGenerator;
 
-    // OK 鍵長按定時器架構
-    private final ScheduledExecutorService mScheduler = Executors.newSingleThreadScheduledExecutor();
-    private ScheduledFuture<?> mOkLongPressFuture = null;
-    private volatile boolean mIsOkDown = false;
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -80,7 +70,7 @@ public class PttBridgeService extends Service {
         } catch (Exception ignored) {}
         registerPttReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Precise OK Timer)");
+        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Volume Down Pocket Lock Engine)");
     }
 
     /**
@@ -171,49 +161,11 @@ public class PttBridgeService extends Service {
         }
     }
 
-    private synchronized void handleOkKeyLogEvent() {
+    private synchronized void triggerPocketLock() {
         if (PocketLockActivity.isLocked()) {
-            cancelOkTimer();
             return;
         }
-
-        if (!mIsOkDown) {
-            // 第一次收到 keycode=23 -> Key Down！啟動 4.8 秒鎖定定時器
-            mIsOkDown = true;
-            Log.d(TAG, "OK Key Down detected -> Starting 4.8s Timer");
-            if (mOkLongPressFuture != null) {
-                mOkLongPressFuture.cancel(false);
-            }
-            mOkLongPressFuture = mScheduler.schedule(new Runnable() {
-                @Override
-                public void run() {
-                    onOkLongPressTimeout();
-                }
-            }, OK_LONG_PRESS_MS, TimeUnit.MILLISECONDS);
-        } else {
-            // 第二次收到 keycode=23 -> Key Up！放開按鍵，取消定時器
-            Log.d(TAG, "OK Key Up detected -> Cancelling Timer");
-            cancelOkTimer();
-        }
-    }
-
-    private synchronized void cancelOkTimer() {
-        mIsOkDown = false;
-        if (mOkLongPressFuture != null) {
-            mOkLongPressFuture.cancel(false);
-            mOkLongPressFuture = null;
-        }
-    }
-
-    private synchronized void onOkLongPressTimeout() {
-        if (mIsOkDown && !PocketLockActivity.isLocked()) {
-            Log.i(TAG, "OK Key 4.8s timer fired! Activating Pocket Lock");
-            mIsOkDown = false;
-            triggerPocketLock();
-        }
-    }
-
-    private void triggerPocketLock() {
+        Log.i(TAG, "F4 / Volume-Down Long Press -> Triggering Pocket Lock Mode");
         try {
             if (mToneGenerator != null) {
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 350);
@@ -255,7 +207,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (含 ALSA-BCLO 與長按OK口袋鎖定)")
+               .setContentText("PTT 守護中 (含 ALSA-BCLO 與長按音量下防誤觸)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -271,7 +223,6 @@ public class PttBridgeService extends Service {
                 if (intent == null || intent.getAction() == null) return;
                 String action = intent.getAction();
                 if ("unipro.hotkey.ptt.down".equals(action) || "android.intent.action.PTT.down".equals(action)) {
-                    cancelOkTimer();
                     handlePttDown();
                 } else if ("unipro.hotkey.ptt.up".equals(action) || "android.intent.action.PTT.up".equals(action)) {
                     handlePttUp();
@@ -304,14 +255,17 @@ public class PttBridgeService extends Service {
                         String line;
                         while (mRunning && (line = reader.readLine()) != null) {
                             if (line.contains("unipro.hotkey.ptt.down")) {
-                                cancelOkTimer();
                                 handlePttDown();
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
-                            } else if (line.contains("interceptKeyTq keycode=23")) {
-                                handleOkKeyLogEvent();
-                            } else if (line.contains("KEYCODE_DPAD_CENTER")) {
-                                cancelOkTimer();
+                            } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
+                                // 長按音量下鍵逾時 -> 立即進入防誤觸鎖定！
+                                triggerPocketLock();
+                            } else if (line.contains("unipro.hotkey.p3.down")) {
+                                // 若已處於鎖定狀態，音量下鍵點擊 -> 輔助計數解鎖！
+                                if (PocketLockActivity.isLocked()) {
+                                    PocketLockActivity.registerUnlockClick();
+                                }
                             }
                         }
                     } catch (Exception e) {
@@ -348,8 +302,6 @@ public class PttBridgeService extends Service {
     @Override
     public void onDestroy() {
         mRunning = false;
-        cancelOkTimer();
-        mScheduler.shutdownNow();
         if (mLogcatProcess != null) {
             mLogcatProcess.destroy();
             mLogcatProcess = null;
