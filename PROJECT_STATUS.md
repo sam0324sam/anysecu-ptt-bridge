@@ -3,8 +3,8 @@
 ## 1. 專案核心成果 (Milestone Achieved)
 - **硬體對象**：Anysecu G393 實體按鍵對講機 (Qualcomm MSM8909, Android 8.1.0, 物理螢幕 128x160)。
 - **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」、「防搶尾音 (Hangover Time)」與專為滑雪/戶外設計的「口袋防誤觸鎖定 (Pocket Lock Mode)」。
-- **目前版本**：v1.4 (ALSA-BCLO 硬體級佔線禁發 + 長按 5 秒 OK 鍵口袋防誤觸鎖定)。
-- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲！
+- **目前版本**：v1.6 (ALSA-BCLO 佔線禁發 + 純淨口袋防誤觸鎖定 + 電量語音階梯提醒 + 音量+長按生活口語12小時制報時)。
+- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；音量上鍵長按無縫口語報時！
 
 ---
 
@@ -31,16 +31,25 @@
   - 靜止時狀態必定為 `closed`（首字元 `'c'` 極速跳過）；隊友說話喇叭震動時狀態即時躍遷為 `RUNNING`。
 - **優勢**：100% 物理硬體真實狀態反映，徹底杜絕死鎖，實現精準 BCLO 佔線禁發與 200ms 防搶尾音保護。
 
-### ADR-04: 口袋防誤觸鎖定 (Pocket Lock Mode - Logcat + Overlay Activity)
-- **需求與情境**：
-  - 使用者於滑雪或戶外活動時將對講機放在雪衣口袋，正面豐富的實體方向鍵、返回鍵容易因身體壓迫而誤觸退出 Mumla 或變更頻道。
-  - 需要在不點螢幕、不切換 App 的前提下，實現：正面長按 OK 鍵 5 秒 -> 關閉螢幕（背光調至最低純黑），阻擋除了 PTT 與 OK 以外的所有正面按鍵；解鎖方法為連點 OK 鍵 5 下。
-- **實作架構**：
-  - **捨棄 AccessibilityService**：Android 8.1 韌體下 shell 無法設定 `enabled_accessibility_services`，且使用者介面無法觸控點擊啟用。
-  - **純 Logcat 偵測長按 5 秒**：Service 藉由監聽 `WindowManager:D` 中的 `KEYCODE_DPAD_CENTER` 連續按壓事件累積滿 4.8 秒，發出提示音並啟動 `PocketLockActivity`。
-  - **全黑純黑遮罩與背光最低**：`PocketLockActivity` 設定 `screenBrightness = 0.001f` 及沉浸式全螢幕，如同熄屏。
-  - **全按鍵吞噬與 5 次連擊判定**：覆寫 `dispatchKeyEvent`，對正面除 OK 鍵外的所有按鍵一律 `return true` 吃掉；OK 鍵在 800ms 窗口內累計連點 5 下即調用 `finish()` 解除鎖定並播放確認音。
-  - **PTT 直通不受影響**：PTT 側鍵走硬體 F1 logcat 管道，在鎖定狀態下依然 100% 正常通話並具備 ALSA-BCLO 守護。
+### ADR-05: 純淨口袋防誤觸鎖定 (Pure Pocket Lock - Volume-Down Long Press)
+- **決策 (v1.5)**：
+  - 將鎖定觸發鍵由正面 OK 鍵改為側邊音量下鍵長按（高通底層事件 `MSG_KEY_F4_LONG_PRESS_TIMEOUT`）。
+  - 解鎖由音量下鍵連續點擊 5 次退出。
+  - 徹底移除任何主動進入系統休眠（`lockNow()`、`setPowerMode`）或螢幕背光強制覆寫代碼，完全保留原廠系統休眠逾時機制，消滅休眠喚醒的 1.06 秒延遲。
+  - 覆寫 `dispatchKeyEvent` 徹底吞噬正面按鍵與音量+鍵，全黑視窗關閉內容渲染，達成 0 延遲純淨防誤觸。
+
+### ADR-06: 非充電電量階梯離線語音播報 (Offline Battery Ladder Reports)
+- **決策 (v1.5)**：
+  - 在非充電狀態下，當電量依序降至 80%、60%、40%、20%、10%、5% 時，自動觸發離線繁中語音提示。
+  - 採用預錄 Microsoft Hanhan zh-TW 繁體中文音訊包，不依賴原廠 ROM 缺乏的系統 TTS。
+  - 具備通話避讓安全：若電量門檻在 PTT 發話期間觸發，自動暫緩並於放開 PTT 350ms 後補報。
+
+### ADR-07: 音量+長按生活口語 12 小時制離線報時 (Volume+ Long Press Time Announcement)
+- **決策 (v1.6)**：
+  - 底層驅動在長按音量上鍵逾時時輸出 `MSG_KEY_F3_LONG_PRESS_TIMEOUT`，由 Service 即時捕獲。
+  - 採生活口語 12 小時制（劃分凌晨 0~5、上午 6~11、中午 12、下午 13~17、晚上 18~23），小時 1~12（2點唸「兩點」），分鐘 0~59（0分唸「整」，1~9分唸「零X分」）。
+  - **Zero Gap PCM 拼接引擎**：使用預錄 16kHz 16-bit Mono 語音片段，在記憶體中精確定位 `data` chunk 提取 PCM 樣本無縫串接，一次性寫入標準 WAV header 由 `MediaPlayer` 播放，發音如同自然真人說話般流暢無停頓。
+  - 通話避讓：發話中長按自動忽略，保證通話私密與頻道乾淨。
 
 ---
 
