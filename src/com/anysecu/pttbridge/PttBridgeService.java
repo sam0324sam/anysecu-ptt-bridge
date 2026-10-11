@@ -9,12 +9,16 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.media.SoundPool;
 import android.media.ToneGenerator;
 import android.os.BatteryManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -60,7 +64,23 @@ public class PttBridgeService extends Service {
     private volatile boolean mBlocked = false;
     private volatile long mLastPlaybackActiveTime = 0;
     private volatile long mLastBusyToneTime = 0;
+    private volatile long mLastLocalSoundEndTime = 0;
     private ToneGenerator mToneGenerator;
+
+    // 發話許可音 (Talk Permit Tone) 與 結束確認音 (Roger Beep)
+    private SoundPool mSoundPool;
+    private int mPermitSoundId = 0;
+    private int mEndSoundId = 0;
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable mStartTalkRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (mIsTalking) {
+                Log.d(TAG, "Permit tone played -> Mumla Talk ON");
+                sendMumlaTalk("on");
+            }
+        }
+    };
 
     // 電量階梯語音報告
     private BroadcastReceiver mBatteryReceiver;
@@ -68,7 +88,6 @@ public class PttBridgeService extends Service {
     private int mLastAnnouncedThreshold = -1;
     private boolean mBatteryInitialized = false;
     private int mPendingBatteryResId = 0;
-
 
     @Override
     public void onCreate() {
@@ -78,10 +97,31 @@ public class PttBridgeService extends Service {
         try {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
         } catch (Exception ignored) {}
+
+        // 初始化 SoundPool (低延遲短音效播放)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+                mSoundPool = new SoundPool.Builder()
+                    .setMaxStreams(4)
+                    .setAudioAttributes(attrs)
+                    .build();
+            } else {
+                mSoundPool = new SoundPool(4, AudioManager.STREAM_MUSIC, 0);
+            }
+            mPermitSoundId = mSoundPool.load(this, R.raw.ptt_permit, 1);
+            mEndSoundId = mSoundPool.load(this, R.raw.ptt_end, 1);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize SoundPool: " + e.getMessage());
+        }
+
         registerPttReceiver();
         registerBatteryReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.6 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery & Time Voice Reports)");
+        Log.i(TAG, "PttBridgeService v1.7 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery/Time Reports + Permit Tone & Roger Beep)");
     }
 
     /**
@@ -124,6 +164,10 @@ public class PttBridgeService extends Service {
 
         boolean activeNow = isAlsaPlaybackActive();
         if (activeNow) {
+            // 若當前聲音屬於本機播放之短提示音 (發話許可音/結束確認音/報時/電量)，非隊友遠端說話，不誤判為佔線
+            if (System.currentTimeMillis() < mLastLocalSoundEndTime) {
+                return false;
+            }
             mLastPlaybackActiveTime = System.currentTimeMillis();
             return true;
         }
@@ -135,11 +179,34 @@ public class PttBridgeService extends Service {
 
     private void playBusyTone() {
         mLastBusyToneTime = System.currentTimeMillis();
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 120;
         try {
             if (mToneGenerator != null) {
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 80);
             }
         } catch (Exception ignored) {}
+    }
+
+    private void playPermitTone() {
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 100;
+        if (mSoundPool != null && mPermitSoundId != 0) {
+            try {
+                mSoundPool.play(mPermitSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+            } catch (Exception e) {
+                Log.e(TAG, "playPermitTone error: " + e.getMessage());
+            }
+        }
+    }
+
+    private void playEndTone() {
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 80;
+        if (mSoundPool != null && mEndSoundId != 0) {
+            try {
+                mSoundPool.play(mEndSoundId, 1.0f, 1.0f, 1, 0, 1.0f);
+            } catch (Exception e) {
+                Log.e(TAG, "playEndTone error: " + e.getMessage());
+            }
+        }
     }
 
     private synchronized void handlePttDown() {
@@ -154,8 +221,11 @@ public class PttBridgeService extends Service {
         mBlocked = false;
         if (!mIsTalking) {
             mIsTalking = true;
-            Log.d(TAG, "Channel Free -> PTT Down -> Mumla Talk ON");
-            sendMumlaTalk("on");
+            Log.d(TAG, "Channel Free -> PTT Down -> Play Talk Permit Tone (方案 A)");
+            playPermitTone();
+            // 方案 A: 許可音 (~58ms) 播放的同時微緩衝 50ms 後向 Mumla 發出 TALK ON，避免提示音被麥克風翻錄給隊友
+            mMainHandler.removeCallbacks(mStartTalkRunnable);
+            mMainHandler.postDelayed(mStartTalkRunnable, 50);
         }
     }
 
@@ -165,16 +235,19 @@ public class PttBridgeService extends Service {
             return;
         }
 
+        mMainHandler.removeCallbacks(mStartTalkRunnable);
+
         if (mIsTalking) {
             mIsTalking = false;
-            Log.d(TAG, "PTT Up -> Mumla Talk OFF");
+            Log.d(TAG, "PTT Up -> Mumla Talk OFF -> Play Local Roger Beep (方案 A)");
             sendMumlaTalk("off");
+            playEndTone();
 
             // 若在通話期間有累積待播報的電量語音，通話結束後 350ms 播報
             if (mPendingBatteryResId != 0) {
                 final int resId = mPendingBatteryResId;
                 mPendingBatteryResId = 0;
-                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                mMainHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         playBatteryVoice(resId);
@@ -230,7 +303,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (ALSA-BCLO + 口袋鎖定 + 電量/語音報時)")
+               .setContentText("PTT 守護中 (BCLO + 口袋鎖定 + 報時 + 許可/結束音)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -415,6 +488,7 @@ public class PttBridgeService extends Service {
                     }
                 });
                 mMediaPlayer.start();
+                mLastLocalSoundEndTime = System.currentTimeMillis() + 1500;
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to play battery voice: " + e.getMessage());
@@ -523,6 +597,7 @@ public class PttBridgeService extends Service {
                 }
             });
             mMediaPlayer.start();
+            mLastLocalSoundEndTime = System.currentTimeMillis() + 2500;
         } catch (Exception e) {
             Log.e(TAG, "Error synthesizing or playing time WAV: " + e.getMessage(), e);
         }
@@ -585,6 +660,13 @@ public class PttBridgeService extends Service {
             } catch (Exception ignored) {}
             mToneGenerator = null;
         }
+        if (mSoundPool != null) {
+            try {
+                mSoundPool.release();
+            } catch (Exception ignored) {}
+            mSoundPool = null;
+        }
+        mMainHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
 
