@@ -33,10 +33,10 @@ $Keystore = Join-Path $ScriptDir "debug.keystore"
 $BinDir = Join-Path $ScriptDir "bin"
 $GenDir = Join-Path $ScriptDir "gen"
 $ResDir = Join-Path $ScriptDir "res"
-$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.4.apk"
+$OutApk = Join-Path $ScriptDir "releases\AnysecuPttBridge-v1.5.apk"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Building Anysecu PTT Bridge (v1.4)      " -ForegroundColor Cyan
+Write-Host "  Building Anysecu PTT Bridge (v1.5)      " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # 2. 清理與建立目錄
@@ -61,9 +61,7 @@ if (Test-Path $ResDir) {
 
 # 5. 編譯 Java 代碼 (目標 Java 8 以確保相容 Android 8.1 / d8)
 Write-Host "[*] Compiling Java source files..." -ForegroundColor Green
-$SrcDirs = @("$ScriptDir\src\*.java")
-if (Test-Path "$GenDir\*.java") { $SrcDirs += "$GenDir\*.java" }
-$JavaFiles = (Get-ChildItem -Recurse $SrcDirs).FullName
+$JavaFiles = (Get-ChildItem -Path @("$ScriptDir\src", "$GenDir") -Filter "*.java" -Recurse -File).FullName
 & $Javac -source 8 -target 8 -encoding UTF-8 -cp $AndroidJar -d $BinDir $JavaFiles
 
 # 6. D8 編譯為 classes.dex

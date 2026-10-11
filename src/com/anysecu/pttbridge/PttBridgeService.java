@@ -10,7 +10,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.media.ToneGenerator;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
@@ -60,6 +62,13 @@ public class PttBridgeService extends Service {
     private volatile long mLastBusyToneTime = 0;
     private ToneGenerator mToneGenerator;
 
+    // 電量階梯語音報告
+    private BroadcastReceiver mBatteryReceiver;
+    private MediaPlayer mMediaPlayer;
+    private int mLastAnnouncedThreshold = -1;
+    private boolean mBatteryInitialized = false;
+    private int mPendingBatteryResId = 0;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -69,8 +78,9 @@ public class PttBridgeService extends Service {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
         } catch (Exception ignored) {}
         registerPttReceiver();
+        registerBatteryReceiver();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.4 started (Hardware ALSA-BCLO + Precise Pocket Lock Engine)");
+        Log.i(TAG, "PttBridgeService v1.5 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery Voice Reports)");
     }
 
     /**
@@ -158,6 +168,18 @@ public class PttBridgeService extends Service {
             mIsTalking = false;
             Log.d(TAG, "PTT Up -> Mumla Talk OFF");
             sendMumlaTalk("off");
+
+            // 若在通話期間有累積待播報的電量語音，通話結束後 350ms 播報
+            if (mPendingBatteryResId != 0) {
+                final int resId = mPendingBatteryResId;
+                mPendingBatteryResId = 0;
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        playBatteryVoice(resId);
+                    }
+                }, 350);
+            }
         }
     }
 
@@ -289,6 +311,112 @@ public class PttBridgeService extends Service {
         sendBroadcast(talkIntent);
     }
 
+    private void registerBatteryReceiver() {
+        if (mBatteryReceiver != null) return;
+        mBatteryReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || !Intent.ACTION_BATTERY_CHANGED.equals(intent.getAction())) return;
+
+                int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                boolean isCharging = (status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                                      status == BatteryManager.BATTERY_STATUS_FULL);
+
+                int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                if (scale <= 0) scale = 100;
+                int percent = (int) ((level / (float) scale) * 100);
+
+                handleBatteryUpdate(percent, isCharging);
+            }
+        };
+        registerReceiver(mBatteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+    }
+
+    private void handleBatteryUpdate(int percent, boolean isCharging) {
+        final int[] THRESHOLDS = { 80, 60, 40, 20, 10, 5 };
+
+        if (!mBatteryInitialized) {
+            mBatteryInitialized = true;
+            // 開機/服務啟動時初始化基準門檻，避免開機直接誤播已經過去的門檻
+            for (int t : THRESHOLDS) {
+                if (percent <= t) {
+                    mLastAnnouncedThreshold = t;
+                }
+            }
+            Log.i(TAG, "Battery monitor initialized: " + percent + "%, charging=" + isCharging + ", baseThreshold=" + mLastAnnouncedThreshold);
+            return;
+        }
+
+        if (isCharging) {
+            // 充電時回充：若電量回升超過前一個門檻 + 3%，重置已播報門檻，以利下次放電再次觸發
+            if (mLastAnnouncedThreshold != -1 && percent > mLastAnnouncedThreshold + 3) {
+                mLastAnnouncedThreshold = -1;
+            }
+            mPendingBatteryResId = 0;
+            return;
+        }
+
+        // 非充電放電中：檢查是否剛好跌破門檻 (80, 60, 40, 20, 10, 5)
+        for (int t : THRESHOLDS) {
+            if (percent <= t && (mLastAnnouncedThreshold == -1 || mLastAnnouncedThreshold > t)) {
+                mLastAnnouncedThreshold = t;
+                int resId = getBatteryAudioRes(t);
+                if (mIsTalking) {
+                    mPendingBatteryResId = resId;
+                    Log.i(TAG, "Battery threshold " + t + "% hit during PTT, deferred.");
+                } else {
+                    Log.i(TAG, "Battery threshold " + t + "% hit (" + percent + "%), announcing now.");
+                    playBatteryVoice(resId);
+                }
+                break;
+            }
+        }
+    }
+
+    private int getBatteryAudioRes(int threshold) {
+        switch (threshold) {
+            case 80: return R.raw.battery_80;
+            case 60: return R.raw.battery_60;
+            case 40: return R.raw.battery_40;
+            case 20: return R.raw.battery_20;
+            case 10: return R.raw.battery_10;
+            case 5:  return R.raw.battery_5;
+            default: return 0;
+        }
+    }
+
+    private synchronized void playBatteryVoice(int resId) {
+        if (resId == 0) return;
+        try {
+            if (mMediaPlayer != null) {
+                try {
+                    if (mMediaPlayer.isPlaying()) {
+                        mMediaPlayer.stop();
+                    }
+                    mMediaPlayer.release();
+                } catch (Exception ignored) {}
+                mMediaPlayer = null;
+            }
+            mMediaPlayer = MediaPlayer.create(this, resId);
+            if (mMediaPlayer != null) {
+                mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+                mMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                    @Override
+                    public void onCompletion(MediaPlayer mp) {
+                        try { mp.release(); } catch (Exception ignored) {}
+                        if (mMediaPlayer == mp) {
+                            mMediaPlayer = null;
+                        }
+                    }
+                });
+                mMediaPlayer.start();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to play battery voice: " + e.getMessage());
+        }
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         return START_STICKY;
@@ -310,6 +438,18 @@ public class PttBridgeService extends Service {
                 unregisterReceiver(mPttReceiver);
             } catch (Exception ignored) {}
             mPttReceiver = null;
+        }
+        if (mBatteryReceiver != null) {
+            try {
+                unregisterReceiver(mBatteryReceiver);
+            } catch (Exception ignored) {}
+            mBatteryReceiver = null;
+        }
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.release();
+            } catch (Exception ignored) {}
+            mMediaPlayer = null;
         }
         if (mToneGenerator != null) {
             try {
