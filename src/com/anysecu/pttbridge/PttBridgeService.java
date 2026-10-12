@@ -487,10 +487,10 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定 (鎖定中 triggerPocketLock 自動忽略)
                                 triggerPocketLock();
-                            } else if (PocketLockActivity.isLocked() && line.contains("keycode=24 ")) {
-                                // 口袋鎖定模式下 (無論螢幕是否休眠全暗)，音量+ (keycode 24) 即時觸發語音報時
-                                // 嚴格排除原廠 F4/音量下鍵的 unipro.hotkey.p3.down
-                                Log.i(TAG, "Volume+ detected while locked -> Announce time directly");
+                            } else if (PocketLockActivity.isLocked() && line.contains("keycode=24 ") && line.contains("interactive=false")) {
+                                // 僅在休眠全暗黑屏 (interactive=false) 且處於口袋鎖定模式時，由 Service 即時喚醒並報時
+                                // 螢幕亮起狀態 (interactive=true) 全權交由 PocketLockActivity 進行 500ms 長按判定與放開吞噬，絕不秒報時亦不重複報時
+                                Log.i(TAG, "Volume+ detected while screen asleep -> Wake and announce time directly");
                                 announceCurrentTime();
                             }
                         }
