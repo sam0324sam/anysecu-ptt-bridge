@@ -117,7 +117,7 @@ public class PocketLockActivity extends Activity {
     }
 
     private boolean isVolumeDownKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == 25;
+        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == 25 || keyCode == KeyEvent.KEYCODE_F4 || keyCode == 134;
     }
 
     @Override

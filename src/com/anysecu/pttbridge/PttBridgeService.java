@@ -406,11 +406,11 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
-                                // 僅由長按音量下鍵觸發進入鎖定
+                                // 僅由長按音量下鍵觸發進入鎖定 (鎖定中 triggerPocketLock 自動忽略)
                                 triggerPocketLock();
-                            } else if (PocketLockActivity.isLocked() && 
-                                      (line.contains("keycode=24") || line.contains("unipro.hotkey.p3.down"))) {
-                                // 口袋鎖定模式下 (無論螢幕是否休眠全暗)，音量+ 均即時觸發語音報時
+                            } else if (PocketLockActivity.isLocked() && line.contains("keycode=24 ")) {
+                                // 口袋鎖定模式下 (無論螢幕是否休眠全暗)，音量+ (keycode 24) 即時觸發語音報時
+                                // 嚴格排除原廠 F4/音量下鍵的 unipro.hotkey.p3.down
                                 Log.i(TAG, "Volume+ detected while locked -> Announce time directly");
                                 announceCurrentTime();
                             }
