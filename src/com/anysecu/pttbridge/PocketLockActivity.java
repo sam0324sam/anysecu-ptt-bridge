@@ -29,6 +29,17 @@ public class PocketLockActivity extends Activity {
     private android.media.SoundPool mSoundPool;
     private int mClickSoundId = 0;
 
+    private final android.os.Handler mUnlockHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean mIsUnlocking = false;
+    private final Runnable mFinishRunnable = new Runnable() {
+        @Override
+        public void run() {
+            Log.i(TAG, "Unlocking transition complete. Finishing PocketLockActivity.");
+            finish();
+            sInstance = null;
+        }
+    };
+
     private final android.os.Handler mVolUpHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean mVolUpLongPressTriggered = false;
     private final Runnable mVolUpLongPressRunnable = new Runnable() {
@@ -125,6 +136,16 @@ public class PocketLockActivity extends Activity {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
+        // 若已進入解鎖過渡期間，100% 徹底吞噬所有按鍵與放開事件，嚴格防止放開時合成的 25 鍵碼洩漏給系統 AudioService 下調音量
+        if (mIsUnlocking) {
+            if (action == KeyEvent.ACTION_UP && isVolumeDownPhysicalKey(keyCode)) {
+                // 收到第 5 次按壓的實體放開事件後，緩衝 120ms 確保伴隨注入的合成 25 鍵碼也被完全吃掉，再關閉視窗
+                mUnlockHandler.removeCallbacks(mFinishRunnable);
+                mUnlockHandler.postDelayed(mFinishRunnable, 120);
+            }
+            return true;
+        }
+
         // 1. 解鎖鍵：只響應實體「F4/音量下鍵」(134) 的 ACTION_DOWN 按下事件，且 repeatCount 必須為 0
         if (isVolumeDownPhysicalKey(keyCode)) {
             if (action == KeyEvent.ACTION_DOWN) {
@@ -212,16 +233,19 @@ public class PocketLockActivity extends Activity {
     }
 
     private void unlockAndFinish() {
-        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Finishing overlay.");
+        if (mIsUnlocking) return;
+        mIsUnlocking = true;
+        Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Playing ACK and buffering release event.");
         try {
             if (mToneGenerator != null) {
-                // 輕快兩聲確認音「嗶嗶」
+                // 輕快兩聲確認音「嗶嗶」(250ms)
                 mToneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 250);
             }
         } catch (Exception ignored) {}
 
-        finish();
-        sInstance = null;
+        // 保底 380ms 關閉（完整播放 250ms 確認音並吃掉所有可能延遲的放開與注入事件）
+        mUnlockHandler.removeCallbacks(mFinishRunnable);
+        mUnlockHandler.postDelayed(mFinishRunnable, 380);
     }
 
     @Override
@@ -231,6 +255,7 @@ public class PocketLockActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mUnlockHandler.removeCallbacks(mFinishRunnable);
         mVolUpHandler.removeCallbacks(mVolUpLongPressRunnable);
         if (mSoundPool != null) {
             try { mSoundPool.release(); } catch (Exception ignored) {}
