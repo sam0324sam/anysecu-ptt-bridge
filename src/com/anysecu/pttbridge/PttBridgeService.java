@@ -394,10 +394,10 @@ public class PttBridgeService extends Service {
                 while (mRunning) {
                     try {
                         try {
-                            Runtime.getRuntime().exec("logcat -b system -c").waitFor();
+                            Runtime.getRuntime().exec("logcat -b system -b main -c").waitFor();
                         } catch (Exception ignored) {}
 
-                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-v", "raw", "-s", "WindowManager:D"});
+                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-b", "main", "-v", "raw", "-s", "WindowManager:D"});
                         BufferedReader reader = new BufferedReader(new InputStreamReader(mLogcatProcess.getInputStream()));
                         String line;
                         while (mRunning && (line = reader.readLine()) != null) {
@@ -408,6 +408,11 @@ public class PttBridgeService extends Service {
                             } else if (line.contains("MSG_KEY_F4_LONG_PRESS_TIMEOUT")) {
                                 // 僅由長按音量下鍵觸發進入鎖定
                                 triggerPocketLock();
+                            } else if (PocketLockActivity.isLocked() && 
+                                      (line.contains("keycode=24") || line.contains("unipro.hotkey.p3.down"))) {
+                                // 口袋鎖定模式下 (無論螢幕是否休眠全暗)，音量+ 均即時觸發語音報時
+                                Log.i(TAG, "Volume+ detected while locked -> Announce time directly");
+                                announceCurrentTime();
                             }
                         }
                     } catch (Exception e) {
@@ -543,11 +548,29 @@ public class PttBridgeService extends Service {
         }
     }
 
+    private volatile long mLastTimeAnnounceTimestamp = 0;
+
     private synchronized void announceCurrentTime() {
         if (mIsTalking) {
             Log.d(TAG, "Ignore time announcement because PTT is active");
             return;
         }
+
+        long now = System.currentTimeMillis();
+        if (now - mLastTimeAnnounceTimestamp < 3000) {
+            Log.d(TAG, "Ignore time announcement within debounce window (" + (now - mLastTimeAnnounceTimestamp) + "ms)");
+            return;
+        }
+        mLastTimeAnnounceTimestamp = now;
+
+        // 喚醒 CPU Partial WakeLock (3500ms)，確保螢幕休眠全暗狀態下語音播報完整不破音
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                android.os.PowerManager.WakeLock wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "AnysecuPttBridge:TimeAnnounce");
+                wl.acquire(3500);
+            }
+        } catch (Exception ignored) {}
 
         try {
             // 完全遵循對講機系統當前時間與時區 (不覆蓋時區)
