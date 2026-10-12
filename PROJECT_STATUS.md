@@ -3,8 +3,8 @@
 ## 1. 專案核心成果 (Milestone Achieved)
 - **硬體對象**：Anysecu G393 實體按鍵對講機 (Qualcomm MSM8909, Android 8.1.0, 物理螢幕 128x160)。
 - **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」、「防搶尾音 (Hangover Time)」與專為滑雪/戶外設計的「口袋防誤觸鎖定 (Pocket Lock Mode)」。
-- **目前版本**：v1.6 (ALSA-BCLO 佔線禁發 + 純淨口袋防誤觸鎖定 + 電量語音階梯提醒 + 音量+長按生活口語12小時制報時)。
-- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；音量上鍵長按無縫口語報時！
+- **目前版本**：v2.0 (發話許可音 + 本地 Roger Beep + ALSA-BCLO 佔線禁發 + 純淨口袋防誤觸鎖定 + 休眠/開屏全時音量+即刻報時 + 電量語音階梯提醒)。
+- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；發話許可音/結束音音量 45% 且硬體靜音 100% 杜絕麥克風翻錄；音量上鍵在休眠黑屏與開屏鎖定下皆能即刻清晰報時，音量下鍵 100% 嚴格隔離絕不誤報時！
 
 ---
 
@@ -17,7 +17,7 @@
 
 ### ADR-02: 突破 128x160 超小螢幕 UI 截斷問題 (Virtual Resolution Override)
 - **問題**：物理螢幕 128x160 在 Mumla 伺服器編輯頁面中無法滾動至「使用者名稱」與「密碼」欄位。Android 系統限制 `wm density >= 72`，無法透過縮小 dpi 解決。
-- **決策**：利用 ADB 注入虛擬解析度 `wm size 200x240` + `wm density 72`。
+- **決策**：利用 ADB 注入虛擬解析度 `wm size 200x240` + `wm density 80`。
 - **優勢**：成功擴增垂直視窗空間，使長表單得以完整顯示與滾動輸入。
 
 ### ADR-03: 拔除 Java AudioCallback，改採 Linux Kernel ALSA 硬體狀態檢測 (ALSA-BCLO Engine)
@@ -50,6 +50,26 @@
   - 採生活口語 12 小時制（劃分凌晨 0~5、上午 6~11、中午 12、下午 13~17、晚上 18~23），小時 1~12（2點唸「兩點」），分鐘 0~59（0分唸「整」，1~9分唸「零X分」）。
   - **Zero Gap PCM 拼接引擎**：使用預錄 16kHz 16-bit Mono 語音片段，在記憶體中精確定位 `data` chunk 提取 PCM 樣本無縫串接，一次性寫入標準 WAV header 由 `MediaPlayer` 播放，發音如同自然真人說話般流暢無停頓。
   - 通話避讓：發話中長按自動忽略，保證通話私密與頻道乾淨。
+
+### ADR-08: 零延遲發話許可音與本地 Roger Beep (方案 A - Hardware Mute Protection)
+- **決策 (v1.8 & v2.0)**：
+  - **發話許可音**：按壓 PTT 瞬間，立即調用 `AudioManager.setMicrophoneMute(true)` 對麥克風實體硬體靜音；在本地揚聲器播放 38ms 溫和弦波（音量 0.45f）；延遲 180ms（消振與緩衝排空）後，解除靜音並向 Mumla 發送 `status=on`。
+  - **本地 Roger Beep**：放開 PTT 瞬間，立即向 Mumla 發送 `status=off` 切斷送話，靜音 80ms 麥克風並在本地揚聲器播放 35ms 溫和結束提示音（音量 0.45f）。
+  - **優勢**：隊友端 100% 聽不到發話許可音與結束音，完全留在本地揚聲器作為使用者聽覺反饋，徹底消滅搶話掉字。
+
+### ADR-09: 休眠黑屏下繞過視窗焦點之即時音量+報時 (Instant Sleep Time Announcement)
+- **問題**：高通 MSM8909 在休眠全暗狀態下甦醒耗時 1071ms，Android 視窗管理器在此期間會丟棄 Activity 的按鍵事件（`Dropping event due to no window focus`），導致長按無反應。
+- **決策 (v1.9)**：
+  - 在背景常駐服務層監聽 `logcat -b system -b main -s WindowManager:D` 的 `keycode=24 ` 事件。
+  - 一經偵測且處於口袋鎖定模式，立即申請 3500ms CPU Partial WakeLock，瞬間啟動語音解碼與播放。
+  - 配合 3000ms 智能防抖窗口，實現休眠全暗按下瞬間即刻開口報時。
+
+### ADR-10: 原廠韌體 p3 鍵碼隔離與誤觸排除 (Strict Keycode Isolation)
+- **問題**：在鎖定狀態下長按音量下鍵亦觸發報時。
+- **真相**：Anysecu 原廠韌體底層將 `keycode=134` (F4 / 音量下鍵) 命名為 `unipro.hotkey.p3.down`，原程式碼誤將其加入報時判斷式。
+- **決策 (v2.0)**：
+  - 徹底剔除 `unipro.hotkey.p3.down`，音量+ 報時僅嚴格識別 `keycode=24 `。
+  - 鎖定狀態下長按音量下鍵維持靜音無動作；快速連按 5 下音量下鍵（支援 `keycode=25` 與 `keycode=134`）精確解鎖。
 
 ---
 
