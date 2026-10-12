@@ -89,6 +89,35 @@ public class PttBridgeService extends Service {
         }
     };
 
+    // 發話超時保護 (Time-Out Timer, TOT)
+    private static final long TOT_TIMEOUT_MS = 60000; // 60 秒發話超時防卡鍵限制
+    private volatile boolean mTotBlocked = false;
+    private final Runnable mTotTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            synchronized (PttBridgeService.this) {
+                if (mIsTalking) {
+                    mTotBlocked = true;
+                    mIsTalking = false;
+                    Log.w(TAG, "TOT Limit (60s) Hit! Force Mumla Talk OFF to free channel & play warning beep");
+
+                    // 1. 立即切斷 Mumla 通話串流，釋放頻道給隊友
+                    sendMumlaTalk("off");
+
+                    // 2. 確保麥克風解除靜音
+                    try {
+                        if (mAudioManager != null) {
+                            mAudioManager.setMicrophoneMute(false);
+                        }
+                    } catch (Exception ignored) {}
+
+                    // 3. 本地發出 3 聲急促警告嗶聲提醒使用者發話已超時切斷
+                    playTotWarningTone();
+                }
+            }
+        }
+    };
+
     // 電量階梯語音報告
     private BroadcastReceiver mBatteryReceiver;
     private MediaPlayer mMediaPlayer;
@@ -219,6 +248,40 @@ public class PttBridgeService extends Service {
         }
     }
 
+    private void playTotWarningTone() {
+        mLastLocalSoundEndTime = System.currentTimeMillis() + 450;
+        try {
+            if (mToneGenerator != null) {
+                // 第 1 聲急促警告嗶聲 (100ms)
+                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 100);
+
+                // 第 2 聲急促警告嗶聲 (140ms 後)
+                mMainHandler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (mToneGenerator != null) {
+                                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 100);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }, 140);
+
+                // 第 3 聲急促警告嗶聲 (280ms 後)
+                mMainHandler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (mToneGenerator != null) {
+                                mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP2, 120);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }, 280);
+            }
+        } catch (Exception ignored) {}
+    }
+
     private synchronized void handlePttDown() {
         if (isChannelBusy()) {
             // 隊友說話中 -> 佔線禁發 (BCLO 阻擋)
@@ -229,6 +292,7 @@ public class PttBridgeService extends Service {
         }
 
         mBlocked = false;
+        mTotBlocked = false;
         if (!mIsTalking) {
             mIsTalking = true;
             Log.d(TAG, "Channel Free -> PTT Down -> Play Talk Permit Tone (方案 A)");
@@ -246,12 +310,27 @@ public class PttBridgeService extends Service {
             // 3. 許可音播完 + 揚聲器消振 + 緩衝清空 (180ms) 後，解除麥克風靜音並向 Mumla 開啟通話
             mMainHandler.removeCallbacks(mStartTalkRunnable);
             mMainHandler.postDelayed(mStartTalkRunnable, 180);
+
+            // 4. 啟動 TOT (Time-Out Timer) 60 秒發話超時防卡鍵保護定時器
+            mMainHandler.removeCallbacks(mTotTimeoutRunnable);
+            mMainHandler.postDelayed(mTotTimeoutRunnable, TOT_TIMEOUT_MS);
         }
     }
 
     private synchronized void handlePttUp() {
+        // 1. 無論是否超時，放開 PTT 立即取消 TOT 計時器
+        mMainHandler.removeCallbacks(mTotTimeoutRunnable);
+
         if (mBlocked) {
             mBlocked = false;
+            return;
+        }
+
+        if (mTotBlocked) {
+            // 剛才是因為超時被系統強制切斷，現在手指終於放開了 -> 重置 TOT 狀態
+            mTotBlocked = false;
+            mIsTalking = false;
+            Log.i(TAG, "PTT Released after TOT cutoff -> State reset, ready for next call");
             return;
         }
 
@@ -351,7 +430,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (BCLO + 口袋鎖定 + 報時 + 許可/結束音)")
+               .setContentText("PTT 守護中 (BCLO + TOT + 口袋鎖定 + 報時 + 許可/結束音)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
