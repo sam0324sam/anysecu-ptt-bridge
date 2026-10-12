@@ -36,11 +36,7 @@ public class PocketLockActivity extends Activity {
         public void run() {
             mVolUpLongPressTriggered = true;
             Log.i(TAG, "Volume-Up Long Press detected in PocketLockActivity! Announcing time.");
-            try {
-                if (mToneGenerator != null) {
-                    mToneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 50);
-                }
-            } catch (Exception ignored) {}
+            // 不播放 ToneGenerator 系統嗶聲，確保口語語音報時純淨無雜音
             Intent intent = new Intent("com.anysecu.pttbridge.action.ANNOUNCE_TIME");
             intent.setPackage(getPackageName());
             sendBroadcast(intent);
@@ -116,8 +112,12 @@ public class PocketLockActivity extends Activity {
         }
     }
 
-    private boolean isVolumeDownKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == 25 || keyCode == KeyEvent.KEYCODE_F4 || keyCode == 134;
+    private boolean isVolumeDownPhysicalKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_F4 || keyCode == 134;
+    }
+
+    private boolean isVolumeDownSyntheticKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == 25;
     }
 
     @Override
@@ -125,14 +125,18 @@ public class PocketLockActivity extends Activity {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
-        // 1. 解鎖鍵：只響應「音量下鍵」的 ACTION_DOWN 按下事件，且 repeatCount 必須為 0
-        if (isVolumeDownKey(keyCode)) {
+        // 1. 解鎖鍵：只響應實體「F4/音量下鍵」(134) 的 ACTION_DOWN 按下事件，且 repeatCount 必須為 0
+        if (isVolumeDownPhysicalKey(keyCode)) {
             if (action == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() == 0) {
                     onUnlockClick();
                 }
             }
-            // 嚴格吃掉音量下鍵的 DOWN 與 UP，絕不改變系統音量！
+            return true;
+        }
+
+        // 吞噬放開時 ROM 注入的合成音量下鍵 (KEYCODE_VOLUME_DOWN 25)，不計數、不改變系統音量
+        if (isVolumeDownSyntheticKey(keyCode)) {
             return true;
         }
 
@@ -177,8 +181,8 @@ public class PocketLockActivity extends Activity {
     private synchronized void onUnlockClick() {
         long now = System.currentTimeMillis();
 
-        // 40ms 極限靈敏防抖 (消除按鍵過濾延遲，支援極速同頻 5 連按)
-        if (now - mLastClickTime < 40) {
+        // 150ms 極限靈敏防抖 (消除微秒級機械開關觸點彈跳與按鍵抖動，支援快速連按)
+        if (now - mLastClickTime < 150) {
             return;
         }
 
