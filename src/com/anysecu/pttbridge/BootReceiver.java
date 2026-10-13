@@ -12,7 +12,8 @@ public class BootReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
             "android.intent.action.QUICKBOOT_POWERON".equals(action) ||
-            Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
+            Intent.ACTION_MY_PACKAGE_REPLACED.equals(action) ||
+            "com.anysecu.pttbridge.action.RESTART_SERVICE".equals(action)) {
 
             Intent serviceIntent = new Intent(context, PttBridgeService.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

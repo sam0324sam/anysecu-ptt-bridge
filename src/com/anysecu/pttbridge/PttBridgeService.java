@@ -772,7 +772,36 @@ public class PttBridgeService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        startForeground(NOTIFICATION_ID, buildNotification());
         return START_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        Log.w(TAG, "onTaskRemoved triggered -> scheduling self-healing restart");
+        scheduleServiceRestart();
+        super.onTaskRemoved(rootIntent);
+    }
+
+    private void scheduleServiceRestart() {
+        try {
+            android.app.AlarmManager am = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            if (am != null) {
+                Intent restartIntent = new Intent(this, BootReceiver.class);
+                restartIntent.setAction("com.anysecu.pttbridge.action.RESTART_SERVICE");
+                PendingIntent pi = PendingIntent.getBroadcast(
+                    this, 9001, restartIntent, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT
+                );
+                long triggerAt = android.os.SystemClock.elapsedRealtime() + 1500;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    am.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+                } else {
+                    am.setExact(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to schedule service restart: " + e.getMessage());
+        }
     }
 
     @Override
@@ -822,6 +851,7 @@ public class PttBridgeService extends Service {
                 mAudioManager.setMicrophoneMute(false);
             } catch (Exception ignored) {}
         }
+        scheduleServiceRestart();
         super.onDestroy();
     }
 

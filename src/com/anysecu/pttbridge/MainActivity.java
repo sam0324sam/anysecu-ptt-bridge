@@ -20,7 +20,7 @@ public class MainActivity extends Activity {
         }
 
         TextView tv = new TextView(this);
-        tv.setText("Anysecu PTT Bridge v1.4\n\n狀態: 服務常駐中\n功能 1: 硬體 ALSA-BCLO 佔線禁發\n功能 2: 口袋防誤觸鎖定\n  • 長按音量下鍵: 滅屏並鎖定正面按鍵\n  • 連按音量下鍵 5 次: 點亮螢幕並解鎖\n  • PTT 鍵隨時可正常發話");
+        tv.setText("Anysecu PTT Bridge v2.5\n\n狀態: 服務常駐中 (永生保活)\n功能 1: 硬體 ALSA-BCLO 佔線禁發 + TOT 60s\n功能 2: 口袋防誤觸鎖定 + 音量上鍵報時\n  • 長按音量下鍵: 滅屏並鎖定正面按鍵\n  • 連按音量下鍵 5 次: 解鎖退出\n  • PTT 鍵隨時可正常發話");
         tv.setTextSize(15);
         tv.setGravity(Gravity.CENTER);
         tv.setPadding(20, 36, 20, 36);

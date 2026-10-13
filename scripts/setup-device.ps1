@@ -8,9 +8,9 @@ param(
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BaseDir = Split-Path -Parent $ScriptDir
-$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.5.apk"
+$PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v2.5.apk"
 if (-not (Test-Path $PttApk)) {
-    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v1.4.apk"
+    $PttApk = Join-Path $BaseDir "releases\AnysecuPttBridge-v2.4.apk"
 }
 $MumlaApk = Join-Path $BaseDir "releases\mumla-v3.7.3.apk"
 
@@ -35,7 +35,7 @@ if ($devices.Count -eq 0) {
 
 $targetDevice = if ($DeviceId) { $DeviceId } else { $devices[0] }
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Anysecu 對講機自動設定工具 (v1.4)" -ForegroundColor Cyan
+Write-Host "  Anysecu 對講機自動設定工具 (v2.5)" -ForegroundColor Cyan
 Write-Host "  目標裝置: $targetDevice" -ForegroundColor Yellow
 Write-Host "==========================================" -ForegroundColor Cyan
 
@@ -45,9 +45,9 @@ Write-Host "[1/7] 停用內建 Zello (釋放硬體鍵與防干擾)..." -Foregrou
 & $adb -s $targetDevice shell pm disable-user com.zello.ptt | Out-Null
 
 # 2. 調整解析度至 200x240 (讓 Mumla 伺服器編輯頁面能完整顯示帳號密碼欄位)
-Write-Host "[2/7] 調整虛擬解析度至 200x240 (解決小螢幕無法輸入帳密問題)..." -ForegroundColor Green
+Write-Host "[2/7] 調整虛擬解析度至 200x240 @ 80dpi (解決小螢幕無法輸入帳密問題)..." -ForegroundColor Green
 & $adb -s $targetDevice shell wm size 200x240
-& $adb -s $targetDevice shell wm density 72
+& $adb -s $targetDevice shell wm density 80
 
 # 3. 安裝 Mumla
 if (Test-Path $MumlaApk) {
@@ -59,25 +59,30 @@ if (Test-Path $MumlaApk) {
 
 # 4. 安裝 Anysecu PTT Bridge
 if (Test-Path $PttApk) {
-    Write-Host "[4/7] 安裝 Anysecu PTT Bridge (v1.4)..." -ForegroundColor Green
+    Write-Host "[4/7] 安裝 Anysecu PTT Bridge (v2.5)..." -ForegroundColor Green
     & $adb -s $targetDevice install -r $PttApk
 } else {
     Write-Error "未找到 PTT Bridge APK: $PttApk"
     exit 1
 }
 
-# 5. 授予 READ_LOGS 特殊權限
-Write-Host "[5/6] 授予 READ_LOGS 特殊權限..." -ForegroundColor Green
+# 5. 授予 READ_LOGS 特殊權限與 Doze 電池優化永久白名單
+Write-Host "[5/7] 授予 READ_LOGS 特殊權限與 Doze 永生保活白名單..." -ForegroundColor Green
 & $adb -s $targetDevice shell pm grant com.anysecu.pttbridge android.permission.READ_LOGS
+& $adb -s $targetDevice shell dumpsys deviceidle whitelist +com.anysecu.pttbridge | Out-Null
+& $adb -s $targetDevice shell dumpsys deviceidle whitelist +se.lublin.mumla | Out-Null
+& $adb -s $targetDevice shell cmd appops set com.anysecu.pttbridge RUN_IN_BACKGROUND allow
+& $adb -s $targetDevice shell cmd appops set se.lublin.mumla RUN_IN_BACKGROUND allow
+& $adb -s $targetDevice shell am set-inactive com.anysecu.pttbridge false
 
 # 6. 啟動 PTT Bridge 服務
-Write-Host "[6/6] 啟動 PTT Bridge 背景常駐守護服務..." -ForegroundColor Green
-& $adb -s $targetDevice shell am start -n com.anysecu.pttbridge/.MainActivity | Out-Null
+Write-Host "[6/7] 啟動 PTT Bridge 背景常駐守護服務..." -ForegroundColor Green
+& $adb -s $targetDevice shell am start-foreground-service -n com.anysecu.pttbridge/.PttBridgeService | Out-Null
 
 Write-Host "==========================================" -ForegroundColor Green
-Write-Host "  部署完成！" -ForegroundColor Green
-Write-Host "  - PTT 側鍵: 零延遲直通 + 硬體級 ALSA-BCLO 佔線禁發" -ForegroundColor Green
-Write-Host "  - 口袋防誤觸鎖定: 長按側邊音量下鍵進入 (關閉顯示全黑遮蔽，正面鍵全阻擋)" -ForegroundColor Green
-Write-Host "  - 解除鎖定: 連續按側邊音量下鍵 5 次解鎖退出 (具備盲操短嗶音反饋)" -ForegroundColor Green
+Write-Host "  部署完成 (v2.5)！" -ForegroundColor Green
+Write-Host "  - PTT 側鍵: 零延遲直通 + 硬體級 ALSA-BCLO 佔線禁發 + TOT 60s 超時保護" -ForegroundColor Green
+Write-Host "  - 口袋防誤觸鎖定: 長按側邊音量下鍵進入 / 連續按音量下鍵 5 次解鎖退出" -ForegroundColor Green
+Write-Host "  - 永生保活: Doze 白名單免疫 + 無 GPU 膨脹 + 雙向自癒重啟" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
 

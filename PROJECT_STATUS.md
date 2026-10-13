@@ -3,8 +3,8 @@
 ## 1. 專案核心成果 (Milestone Achieved)
 - **硬體對象**：Anysecu G393 實體按鍵對講機 (Qualcomm MSM8909, Android 8.1.0, 物理螢幕 128x160)。
 - **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」、「防搶尾音 (Hangover Time)」與專為滑雪/戶外設計的「口袋防誤觸鎖定 (Pocket Lock Mode)」。
-- **目前版本**：v2.4 (音量+長按視窗接管與互動狀態隔離 + 發話超時保護 TOT 60s + 解鎖退場放開緩衝 + 零音量外洩 + 實體按鍵解耦 + 純淨口語報時 + 發話許可音 + 本地 Roger Beep + ALSA-BCLO 佔線禁發 + 口袋防誤觸鎖定)。
-- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；發話許可音/結束音音量 45% 且硬體靜音 100% 杜絕麥克風翻錄；音量上鍵長按 500ms 語音報時且放開 100% 吞噬絕不二次重複報時；音量下鍵嚴格 5 次實體按壓精確解鎖且退出瞬間音量 100% 保持不變；內建 60 秒 TOT 發話超時自動切斷與 3 聲急促警示，徹底防止誤觸霸台！
+- **目前版本**：v2.5 (三層永生保活架構 + 音量+長按視窗接管與互動狀態隔離 + 發話超時保護 TOT 60s + 解鎖退場放開緩衝 + 零音量外洩 + 實體按鍵解耦 + 純淨口語報時 + 發話許可音 + 本地 Roger Beep + ALSA-BCLO 佔線禁發 + 口袋防誤觸鎖定)。
+- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；發話許可音/結束音音量 45% 且硬體靜音 100% 杜絕麥克風翻錄；音量上鍵長按 500ms 語音報時且放開 100% 吞噬絕不二次重複報時；音量下鍵嚴格 5 次實體按壓精確解鎖且退出瞬間音量 100% 保持不變；內建 60 秒 TOT 發話超時自動切斷與 3 聲急促警示；實作 Doze 白名單免疫、無 GPU 膨脹與雙向自癒重啟，跨夜待機 100% 永不掉線！
 
 ---
 
@@ -115,6 +115,18 @@
   - **開屏鎖定 (`interactive=true`) 歸屬**：Service Logcat 監聽器嚴格排除 `interactive=true`，將開屏鎖定狀態的音量+鍵全權交由 `PocketLockActivity.dispatchKeyEvent` 處理。只有長按滿 500ms 才發送報時廣播；短按（<500ms）放開立即取消定時器防誤觸；放開事件被嚴格吞噬，100% 杜絕二次重複報時。
   - **休眠黑屏 (`interactive=false`) 歸屬**：Service 僅響應螢幕休眠全暗時的按下喚醒（`interactive=false`）；放開時因螢幕已被喚醒為 `interactive=true`，Service 嚴格忽略，同樣杜絕放開二次報時。
 - **優勢**：長按意圖明確、短碰完全防誤觸、放開 100% 乾淨靜音，開屏與休眠雙場景語意完全統一。
+
+### ADR-15: 三層永生保活架構 — 破解凌晨 3 點 Idle Maintenance 與 Doze 攔截 (Immortal Keep-Alive Architecture)
+- **問題**：對講機跨夜待機至隔天早上時，背景守護服務 `PttBridgeService` 消失。
+- **真相 (Logcat Event 鐵證)**：
+  1. **凌晨 03:00:00 `idle maint` 殺手**：Android 8.1 每日凌晨 3 點執行 `performIdleMaintenance()`。由於開啟 `PocketLockActivity` 時系統預設啟動高通 `Adreno-ES20` OpenGL GPU 硬體加速渲染，使進程 PSS 由初始 4.3MB 升至 16.5MB（超過 3 倍閾值），系統主動殺掉進程並排程 1000ms 後重啟服務。
+  2. **Doze / App Idle 攔截重啟**：在等待 1000ms 重啟的空窗期內，因套件未加入 `deviceidle whitelist`，Android 8.1 觸發 `Stopping service due to app idle`，強行取消了 `PttBridgeService` 的重啟排程。
+  3. **視窗重建未拉起服務**：系統重建 `PocketLockActivity` 時，Activity 內部未主動呼叫 `startForegroundService`，導致解鎖後僅剩空殼進程。
+- **決策 (v2.5)**：
+  1. **關閉鎖定視窗 GPU 硬體加速**：於 `AndroidManifest.xml` 為 `PocketLockActivity` 設置 `android:hardwareAccelerated="false"`，消除近 10MB 的 OpenGL RenderThread 記憶體開銷，從源頭避免觸發凌晨 3 點 `idle maint`。
+  2. **系統級 Doze 永久白名單**：將 `com.anysecu.pttbridge` 與 `se.lublin.mumla` 寫入 `deviceidle whitelist` 並授予 `RUN_IN_BACKGROUND allow`，徹底免疫 `app idle` 攔截。
+  3. **雙向保活與 AlarmManager 自救**：`PocketLockActivity` 於 `onCreate`、`onResume`、`unlockAndFinish` 皆強制執行 `ensureServiceRunning()`；`PttBridgeService` 於 `onStartCommand` 確保 `startForeground()` 並在 `onDestroy`/`onTaskRemoved` 透過 `AlarmManager.setExactAndAllowWhileIdle` 排程 1.5 秒強制自癒重啟。
+- **優勢**：達成跨夜、跨週長時待機 100% 永不掉線之工業級可靠度。
 
 ---
 

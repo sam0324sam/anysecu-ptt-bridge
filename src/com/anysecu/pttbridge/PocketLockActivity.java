@@ -65,10 +65,24 @@ public class PocketLockActivity extends Activity {
         }
     }
 
+    private void ensureServiceRunning() {
+        try {
+            Intent serviceIntent = new Intent(this, PttBridgeService.class);
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to ensure PttBridgeService running: " + e.getMessage());
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sInstance = this;
+        ensureServiceRunning();
 
         try {
             mToneGenerator = new ToneGenerator(AudioManager.STREAM_SYSTEM, 90);
@@ -110,6 +124,12 @@ public class PocketLockActivity extends Activity {
         setContentView(blackView);
 
         Log.i(TAG, "PocketLockActivity active (Display Blackout & Front Keys Blocked)");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        ensureServiceRunning();
     }
 
     @Override
@@ -235,6 +255,7 @@ public class PocketLockActivity extends Activity {
     private void unlockAndFinish() {
         if (mIsUnlocking) return;
         mIsUnlocking = true;
+        ensureServiceRunning();
         Log.i(TAG, "Unlocked by 5 Volume-Down clicks! Playing ACK and buffering release event.");
         try {
             if (mToneGenerator != null) {
