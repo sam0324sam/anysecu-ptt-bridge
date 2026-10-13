@@ -21,6 +21,18 @@ public class BootReceiver extends BroadcastReceiver {
             } else {
                 context.startService(serviceIntent);
             }
+
+            // 開機冷啟動護航：喚醒 Mumla 確保自動加入頻道
+            if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
+                "android.intent.action.QUICKBOOT_POWERON".equals(action)) {
+                try {
+                    Intent mumlaLaunch = context.getPackageManager().getLaunchIntentForPackage("se.lublin.mumla");
+                    if (mumlaLaunch != null) {
+                        mumlaLaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        context.startActivity(mumlaLaunch);
+                    }
+                } catch (Exception ignored) {}
+            }
         }
     }
 }

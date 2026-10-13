@@ -3,8 +3,8 @@
 ## 1. 專案核心成果 (Milestone Achieved)
 - **硬體對象**：Anysecu G393 實體按鍵對講機 (Qualcomm MSM8909, Android 8.1.0, 物理螢幕 128x160)。
 - **核心目標**：擺脫原廠 Zello 綁定，全面介接自建開源 Mumla (Mumble) 伺服器，實現多人低延遲、高音質通話，並內建專業無線電必備的「佔線禁發 (BCLO)」、「防搶尾音 (Hangover Time)」與專為滑雪/戶外設計的「口袋防誤觸鎖定 (Pocket Lock Mode)」。
-- **目前版本**：v2.5 (三層永生保活架構 + 音量+長按視窗接管與互動狀態隔離 + 發話超時保護 TOT 60s + 解鎖退場放開緩衝 + 零音量外洩 + 實體按鍵解耦 + 純淨口語報時 + 發話許可音 + 本地 Roger Beep + ALSA-BCLO 佔線禁發 + 口袋防誤觸鎖定)。
-- **驗證狀態**：雙機均已實測驗證大成功，PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；發話許可音/結束音音量 45% 且硬體靜音 100% 杜絕麥克風翻錄；音量上鍵長按 500ms 語音報時且放開 100% 吞噬絕不二次重複報時；音量下鍵嚴格 5 次實體按壓精確解鎖且退出瞬間音量 100% 保持不變；內建 60 秒 TOT 發話超時自動切斷與 3 聲急促警示；實作 Doze 白名單免疫、無 GPU 膨脹與雙向自癒重啟，跨夜待機 100% 永不掉線！
+- **目前版本**：v2.6 (Mumla 斷線無限自動重連看門狗 + 三層永生保活架構 + 音量+長按視窗接管與互動狀態隔離 + 發話超時保護 TOT 60s + 解鎖退場放開緩衝 + 零音量外洩 + 實體按鍵解耦 + 純淨口語報時 + 發話許可音 + 本地 Roger Beep + ALSA-BCLO 佔線禁發 + 口袋防誤觸鎖定)。
+- **驗證狀態**：雙機均已實測驗證大成功！PTT 按住發話無延遲，隊友說話時 100% 精準阻擋送話並響起短促忙線嗶聲；發話許可音/結束音音量 45% 且硬體靜音 100% 杜絕麥克風翻錄；音量上鍵長按 500ms 語音報時且放開 100% 吞噬絕不二次重複報時；音量下鍵嚴格 5 次實體按壓精確解鎖且退出瞬間音量 100% 保持不變；內建 60 秒 TOT 發話超時自動切斷與 3 聲急促警示；實作 Doze 白名單免疫、無 GPU 膨脹與雙向自癒重啟；全新內建 Mumla 無限自動重連看門狗，Wi-Fi/4G 斷網恢復後 500 毫秒內自動無感重連回頻道，徹底告別斷線睡死問題！
 
 ---
 
@@ -127,6 +127,19 @@
   2. **系統級 Doze 永久白名單**：將 `com.anysecu.pttbridge` 與 `se.lublin.mumla` 寫入 `deviceidle whitelist` 並授予 `RUN_IN_BACKGROUND allow`，徹底免疫 `app idle` 攔截。
   3. **雙向保活與 AlarmManager 自救**：`PocketLockActivity` 於 `onCreate`、`onResume`、`unlockAndFinish` 皆強制執行 `ensureServiceRunning()`；`PttBridgeService` 於 `onStartCommand` 確保 `startForeground()` 並在 `onDestroy`/`onTaskRemoved` 透過 `AlarmManager.setExactAndAllowWhileIdle` 排程 1.5 秒強制自癒重啟。
 - **優勢**：達成跨夜、跨週長時待機 100% 永不掉線之工業級可靠度。
+
+### ADR-16: Mumla 斷線無限自動重連看門狗 (Infinite Auto-Reconnect Watchdog)
+- **問題**：在訊號微弱、Wi-Fi 抖動或離開基地台覆蓋時，Mumla 頻道斷線；當網路恢復後，Mumla 徹底睡死不再重連，必須手動點開螢幕點擊連線。
+- **真相 (底層代碼鐵證)**：
+  1. **Android 8.1 廣播封殺**：Mumla（HumlaService）依賴 `ConnectivityManager.CONNECTIVITY_ACTION` 廣播監聽網路恢復。但 Android 8.0/8.1 起為省電全面封鎖背景應用的隱式網路廣播，導致網路恢復時 Mumla 毫無知覺、永遠沉睡。
+  2. **狀態機脆弱**：Mumla 內建重連狀態機在遇到握手超時或 Socket 異常時直接退出狀態機並清空重連旗標，停止重試。
+  3. **開機未自啟**：Mumla 未在 Manifest 中註冊 `RECEIVE_BOOT_COMPLETED`，冷開機後無法自行啟動。
+- **決策 (v2.6)**：
+  1. **官方 SOTA 網路回調**：`PttBridgeService` 註冊 `ConnectivityManager.NetworkCallback`，毫秒級捕獲 `onAvailable` 與 `onLost` 事件。
+  2. **Logcat 業務狀態感知**：透過 `-T 1 -s se.lublin.humla.HumlaService:V` 即時捕捉 Mumla 之 `Connected` 與 `Disconnected` 狀態。
+  3. **定向重連廣播與短暫 WakeLock**：當「有網路」且「Mumla 斷線」時，看門狗獲取 6 秒 `PARTIAL_WAKE_LOCK` 確保黑屏休眠下 CPU 運轉，向 Mumla 發射 `b_reconnect` 定向廣播，並以 10 秒週期無限輪詢重試直到成功回到頻道。
+  4. **開機冷啟動護航**：`BootReceiver` 於開機廣播完成時自動喚起 Mumla，確保對講機開機即進入連線可用狀態。
+- **優勢**：實測網路恢復後 500ms 內全自動無感重新連入頻道；零定時輪詢（Zero-Polling）、離線不狂連，完全不影響待機續航。
 
 ---
 

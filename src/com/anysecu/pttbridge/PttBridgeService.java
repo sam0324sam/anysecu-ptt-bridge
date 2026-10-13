@@ -20,6 +20,13 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.content.ComponentName;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
+import android.net.NetworkRequest;
+import android.os.PowerManager;
 import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
@@ -125,6 +132,30 @@ public class PttBridgeService extends Service {
     private boolean mBatteryInitialized = false;
     private int mPendingBatteryResId = 0;
 
+    // Mumla 斷線自動無限重連看門狗 (Infinite Reconnect Watchdog)
+    private ConnectivityManager mConnectivityManager;
+    private ConnectivityManager.NetworkCallback mNetworkCallback;
+    private volatile boolean mIsNetworkOnline = false;
+    private volatile boolean mMumlaConnected = false;
+    private PowerManager.WakeLock mWatchdogWakeLock;
+
+    private final Runnable mReconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            synchronized (PttBridgeService.this) {
+                if (!mMumlaConnected && mIsNetworkOnline) {
+                    Log.i(TAG, "[Watchdog] Mumla is disconnected & Network is ONLINE -> Triggering reconnect attempt");
+                    sendMumlaReconnect();
+                    // 每 10 秒檢查一次，持續重試直到回到頻道
+                    mMainHandler.removeCallbacks(mReconnectRunnable);
+                    mMainHandler.postDelayed(mReconnectRunnable, 10000);
+                } else {
+                    stopReconnectWatchdog();
+                }
+            }
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -157,8 +188,93 @@ public class PttBridgeService extends Service {
 
         registerPttReceiver();
         registerBatteryReceiver();
+        registerNetworkCallback();
         startLogcatListener();
-        Log.i(TAG, "PttBridgeService v1.7 started (Hardware ALSA-BCLO + Pure Pocket Lock + Battery/Time Reports + Permit Tone & Roger Beep)");
+        Log.i(TAG, "PttBridgeService v2.6 started (ALSA-BCLO + Pure Pocket Lock + Time/Battery Reports + Permit/Roger Tone + Infinite Mumla Watchdog)");
+    }
+
+    private void registerNetworkCallback() {
+        try {
+            mConnectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (mConnectivityManager != null) {
+                NetworkInfo activeInfo = mConnectivityManager.getActiveNetworkInfo();
+                mIsNetworkOnline = (activeInfo != null && activeInfo.isConnected());
+                Log.i(TAG, "[Watchdog] Initial network state: " + (mIsNetworkOnline ? "ONLINE" : "OFFLINE"));
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    NetworkRequest request = new NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build();
+                    mNetworkCallback = new ConnectivityManager.NetworkCallback() {
+                        @Override
+                        public void onAvailable(Network network) {
+                            Log.i(TAG, "[Watchdog] Network onAvailable -> Internet restored");
+                            mIsNetworkOnline = true;
+                            checkAndTriggerReconnect("Network onAvailable");
+                        }
+
+                        @Override
+                        public void onLost(Network network) {
+                            Log.w(TAG, "[Watchdog] Network onLost -> Internet disconnected");
+                            mIsNetworkOnline = false;
+                        }
+                    };
+                    mConnectivityManager.registerNetworkCallback(request, mNetworkCallback);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "[Watchdog] Failed to register NetworkCallback: " + e.getMessage());
+        }
+    }
+
+    private void sendMumlaReconnect() {
+        acquireTemporaryWakeLock(6000);
+        try {
+            // 1. 發送 Mumla 專屬定向重連廣播 (喚醒 MumlaService.reconnect)
+            Intent reconnectIntent = new Intent("b_reconnect");
+            reconnectIntent.setPackage(MUMLA_PKG);
+            sendBroadcast(reconnectIntent);
+
+            // 2. 備援：發送 HumlaService 連線指令
+            Intent serviceIntent = new Intent();
+            serviceIntent.setComponent(new ComponentName(MUMLA_PKG, "se.lublin.mumla.service.MumlaService"));
+            serviceIntent.setAction("se.lublin.humla.ACTION_CONNECT");
+            startService(serviceIntent);
+        } catch (Exception e) {
+            Log.e(TAG, "[Watchdog] Error broadcasting reconnect: " + e.getMessage());
+        }
+    }
+
+    private void acquireTemporaryWakeLock(long timeoutMs) {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                if (mWatchdogWakeLock == null) {
+                    mWatchdogWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AnysecuPttBridge:ReconnectWatchdog");
+                }
+                if (!mWatchdogWakeLock.isHeld()) {
+                    mWatchdogWakeLock.acquire(timeoutMs);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private synchronized void checkAndTriggerReconnect(String reason) {
+        Log.i(TAG, "[Watchdog] checkAndTriggerReconnect: reason=" + reason +
+                   ", isOnline=" + mIsNetworkOnline + ", mumlaConnected=" + mMumlaConnected);
+        if (mIsNetworkOnline && !mMumlaConnected) {
+            mMainHandler.removeCallbacks(mReconnectRunnable);
+            mMainHandler.post(mReconnectRunnable);
+        }
+    }
+
+    private synchronized void stopReconnectWatchdog() {
+        mMainHandler.removeCallbacks(mReconnectRunnable);
+        if (mWatchdogWakeLock != null && mWatchdogWakeLock.isHeld()) {
+            try {
+                mWatchdogWakeLock.release();
+            } catch (Exception ignored) {}
+        }
     }
 
     /**
@@ -430,7 +546,7 @@ public class PttBridgeService extends Service {
         }
 
         builder.setContentTitle("Anysecu PTT Bridge")
-               .setContentText("PTT 守護中 (BCLO + TOT + 口袋鎖定 + 報時 + 許可/結束音)")
+               .setContentText("PTT 守護中 (BCLO + TOT + 口袋鎖定 + 報時 + 斷線無限重連)")
                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                .setContentIntent(pendingIntent)
                .setOngoing(true);
@@ -472,15 +588,48 @@ public class PttBridgeService extends Service {
             public void run() {
                 while (mRunning) {
                     try {
+                        // 啟動前檢查 Mumla 最後連線狀態
                         try {
-                            Runtime.getRuntime().exec("logcat -b system -b main -c").waitFor();
+                            Process pCheck = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "main", "-d", "-s", "se.lublin.humla.HumlaService:V"});
+                            BufferedReader brCheck = new BufferedReader(new InputStreamReader(pCheck.getInputStream()));
+                            String l;
+                            String lastMumlaLog = null;
+                            while ((l = brCheck.readLine()) != null) {
+                                if (l.contains("se.lublin.humla.HumlaService")) {
+                                    lastMumlaLog = l;
+                                }
+                            }
+                            brCheck.close();
+                            pCheck.destroy();
+                            if (lastMumlaLog != null) {
+                                if (lastMumlaLog.contains("Connected")) {
+                                    mMumlaConnected = true;
+                                    Log.i(TAG, "[Watchdog] Initial Mumla state: Connected");
+                                } else {
+                                    mMumlaConnected = false;
+                                    Log.i(TAG, "[Watchdog] Initial Mumla state: Disconnected (" + lastMumlaLog.trim() + ")");
+                                    checkAndTriggerReconnect("Initial Mumla offline");
+                                }
+                            }
                         } catch (Exception ignored) {}
 
-                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{"logcat", "-b", "system", "-b", "main", "-v", "raw", "-s", "WindowManager:D"});
+                        mLogcatProcess = Runtime.getRuntime().exec(new String[]{
+                            "logcat", "-b", "system", "-b", "main", "-T", "1", "-v", "brief", "-s", "WindowManager:D", "se.lublin.humla.HumlaService:V"
+                        });
                         BufferedReader reader = new BufferedReader(new InputStreamReader(mLogcatProcess.getInputStream()));
                         String line;
                         while (mRunning && (line = reader.readLine()) != null) {
-                            if (line.contains("unipro.hotkey.ptt.down")) {
+                            if (line.contains("se.lublin.humla.HumlaService")) {
+                                if (line.contains("Connected")) {
+                                    Log.i(TAG, "[Watchdog] Mumla reported: Connected");
+                                    mMumlaConnected = true;
+                                    stopReconnectWatchdog();
+                                } else if (line.contains("Disconnected") || line.contains("Connection lost") || line.contains("reason:")) {
+                                    Log.w(TAG, "[Watchdog] Mumla reported: Disconnected / Lost (" + line.trim() + ")");
+                                    mMumlaConnected = false;
+                                    checkAndTriggerReconnect("Mumla logcat disconnected");
+                                }
+                            } else if (line.contains("unipro.hotkey.ptt.down")) {
                                 handlePttDown();
                             } else if (line.contains("unipro.hotkey.ptt.up")) {
                                 handlePttUp();
@@ -846,6 +995,13 @@ public class PttBridgeService extends Service {
             mSoundPool = null;
         }
         mMainHandler.removeCallbacksAndMessages(null);
+        stopReconnectWatchdog();
+        if (mConnectivityManager != null && mNetworkCallback != null) {
+            try {
+                mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
+            } catch (Exception ignored) {}
+            mNetworkCallback = null;
+        }
         if (mAudioManager != null) {
             try {
                 mAudioManager.setMicrophoneMute(false);
